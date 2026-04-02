@@ -520,7 +520,7 @@ function NicheIndustryManager({niches,industries,onSaveNiches,onSaveIndustries,s
 // ══ SETTINGS (admin only) ══
 function SettingsView({settings,onSave,users,onAdd,onRemove,onPwReset,cu,niches,industries,onSaveNiches,onSaveIndustries}){
   const [settingsTab,setSettingsTab]=useState("keys");
-  const [f,setF]=useState({anthropicKey:settings.anthropicKey||"",elevenLabsKey:settings.elevenLabsKey||"",elevenLabsVoiceId:settings.elevenLabsVoiceId||"pNInz6obpgDQGcFmaJgB",supabaseUrl:settings.supabaseUrl||"",supabaseKey:settings.supabaseKey||"",apolloKey:settings.apolloKey||"",instantlyKey:settings.instantlyKey||""});
+  const [f,setF]=useState({anthropicKey:settings.anthropicKey||"",elevenLabsKey:settings.elevenLabsKey||"",elevenLabsVoiceId:settings.elevenLabsVoiceId||"pNInz6obpgDQGcFmaJgB",supabaseUrl:settings.supabaseUrl||"",supabaseKey:settings.supabaseKey||"",apolloKey:settings.apolloKey||"",instantlyV2Key:settings.instantlyV2Key||""});
   const [saved,setSaved]=useState(false);
   const [nu,setNu]=useState({username:"",displayName:"",title:"",email:"",phone:"",password:""});
   const [addErr,setAddErr]=useState("");
@@ -559,7 +559,11 @@ function SettingsView({settings,onSave,users,onAdd,onRemove,onPwReset,cu,niches,
             <F lbl="Supabase URL" k="supabaseUrl" ph="https://xxxx.supabase.co"/>
             <F lbl="Supabase anon key" k="supabaseKey" ph="eyJ..." secret/>
             <F lbl="Apollo.io API key" k="apolloKey" ph="..." secret hint="apollo.io → Settings → API Keys (coming soon)"/>
-            <F lbl="Instantly.ai API key" k="instantlyKey" ph="..." secret hint="instantly.ai → Settings → API (coming soon)"/>
+            <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 mb-3">
+              <p className="text-xs text-amber-700 font-semibold mb-1">⚠️ Instantly requires a v2 API key</p>
+              <p className="text-xs text-amber-600">Go to Instantly → Settings → API Keys → Create API Key → select scopes: campaigns:all + leads:all → copy the key below.</p>
+            </div>
+            <F lbl="Instantly.ai API key (v2)" k="instantlyV2Key" ph="inst_v2_..." secret hint="Must be a v2 key — v1 keys will return Unauthorized"/>
             <button onClick={saveKeys} className="w-full py-2.5 rounded-xl bg-slate-800 text-white text-sm font-medium hover:bg-slate-700 flex items-center justify-center gap-2">{saved?<><CheckCircle2 size={14}/>Saved!</>:<><Key size={14}/>Save API keys</>}</button>
           </div>
           <div className="bg-amber-50 border border-amber-100 rounded-2xl p-5">
@@ -627,7 +631,7 @@ create table if not exists config (
 }
 
 // ══ DISCOVER ══
-function Discover({leads,onSave,onEnrich,onOutreach,cu,niches:dynNiches,industries:dynIndustries}){
+function Discover({leads,onSave,onBatchSave,onEnrich,onOutreach,cu,niches:dynNiches,industries:dynIndustries}){
   const nicheList=dynNiches||NICHES;
   const industryList=dynIndustries||INDUSTRIES;
   const [mode,setMode]=useState("industry");
@@ -651,27 +655,32 @@ function Discover({leads,onSave,onEnrich,onOutreach,cu,niches:dynNiches,industri
     if(!canSearch)return;setLoading(true);setResults([]);setErr("");
     const sig=sigs.length?sigs.join(", "):"actively hiring or growing";
     const target=mode==="industry"?`Industry: ${industry}`:`Niche: ${selectedNiche.label}${subNiche?`, sub-niche: ${subNiche}`:""}`;
-    const sixMonthsAgo=new Date();sixMonthsAgo.setMonth(sixMonthsAgo.getMonth()-6);
-    const sinceDate=sixMonthsAgo.toISOString().split("T")[0];
-    const prompt=`You are a B2B sales researcher for Evolve ESolutions (IT/HR/Healthcare/Legal/Financial Services recruitment, Pleasanton CA).
-List 5 real companies that match:
+    const now=new Date();
+    const sixMonthsAgo=new Date(now);sixMonthsAgo.setMonth(now.getMonth()-6);
+    const sinceDate=sixMonthsAgo.toLocaleDateString("en-US",{month:"long",year:"numeric"});
+    const currentDate=now.toLocaleDateString("en-US",{month:"long",year:"numeric"});
+    const prompt=`Search the web and find 5 real companies for Evolve ESolutions (IT/HR/Healthcare/Legal recruitment agency, Pleasanton CA) that match:
 - ${target}
 - Size: ${size||"any"} | Location: ${loc||"any"} | Signal: ${sig}
 
-IMPORTANT: Buying signals must be from the last 6 months (since ${sinceDate}). Only include companies with verifiable recent activity — job postings, funding rounds, leadership changes, expansions, or news from this period. Do not include stale signals.
+MANDATORY: Each company MUST have a real, verifiable buying signal from ${sinceDate} to ${currentDate} only. Search for recent news, job postings, funding announcements, or leadership changes from this period. Do NOT use signals older than ${sinceDate}.
 
-Return ONLY a JSON array (no markdown, no explanation):
-[{"name":"","industry":"","size":"","location":"","website":"","signal":"specific signal with approximate date e.g. Jan 2025","fitScore":80,"fitReason":"why Evolve should contact them now"}]`;
+Return ONLY a JSON array, no markdown:
+[{"name":"","industry":"","size":"","location":"","website":"","signal":"exactly what happened + month year","fitScore":80,"fitReason":"one sentence why Evolve should reach out now"}]`;
 
     try{
-      const t=await ai(prompt,false);
+      const t=await ai(prompt,true); // web search enabled for real recent signals
       // Try to extract JSON array - handle plain JSON or markdown code blocks
       let parsed=null;
       const clean=t.replace(/```json\n?/g,"").replace(/```\n?/g,"").trim();
       const m=clean.match(/\[[\s\S]*\]/);
       if(m){try{parsed=JSON.parse(m[0]);}catch{}}
-      if(parsed?.length) setResults(parsed.map(r=>({...r,searchMode:mode,searchLabel})));
-      else setErr("Could not parse results. Try again.");
+      if(parsed?.length){
+        const enriched=parsed.map(r=>({...r,searchMode:mode,searchLabel}));
+        setResults(enriched);
+        // Auto-save all new leads in one atomic batch
+        onBatchSave(enriched);
+      } else setErr("Could not parse results. Try again.");
     }catch(e){setErr(`Search failed: ${e.message||"Check API key in Settings."}`);}
     setLoading(false);
   }
@@ -956,7 +965,7 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
   const [phC,setPhC]=useState([]);const [scripts,setScripts]=useState({});const [texts,setTexts]=useState({});const [audios,setAudios]=useState({});const [playing,setPlaying]=useState({});const [lScript,setLScript]=useState({});const [lText,setLText]=useState({});const [lVoice,setLVoice]=useState({});const [phTab,setPhTab]=useState({});const [phCp,setPhCp]=useState("");const [phOpen,setPhOpen]=useState(true);
   const [iPushing,setIPushing]=useState(false);const [iPushed,setIPushed]=useState(false);const [iErr,setIErr]=useState("");
   const aRefs=useRef({});
-  const instantlyKey=settings?.instantlyKey||"";
+  const instantlyKey=settings?.instantlyV2Key||settings?.instantlyKey||"";
   useEffect(()=>{sg(`enr_${company.name.toLowerCase().replace(/\s+/g,"_")}`).then(d=>{if(d?.keyContacts){setLiC(d.keyContacts.filter(c=>c.linkedin&&c.linkedin.length>5));setPhC(d.keyContacts.filter(c=>c.phone&&c.phone!=="Not found"));}});},[company.name]);
   const E=`Evolve ESolutions — IT, HR, Healthcare, Financial Services, Legal recruitment, Pleasanton CA. 24–48hr screened candidates. Passive talent. No placement no fee. 1–3 day onboarding.`;
   const iMap={"Technology / SaaS":"IT/software","Financial Services":"finance/compliance","Healthcare":"healthcare/clinical","Legal":"legal/paralegal","Manufacturing":"engineering/ops","E-commerce / Retail":"tech/ops","Construction":"project management","Professional Services":"professional/admin","Media & Marketing":"creative/marketing","Logistics & Supply Chain":"ops/tech"};
@@ -1039,7 +1048,12 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
           ):(
             <div><p className="text-xs font-semibold text-slate-700">Push full sequence to Instantly</p><p className="text-xs text-slate-500">Generates all email steps, creates a campaign draft — you activate it manually.</p></div>
           )}
-          {iErr&&<p className="text-xs text-red-600 mt-1">{iErr}</p>}
+          {iErr&&<div className="mt-1">
+            <p className="text-xs text-red-600">{iErr}</p>
+            {iErr.includes("Unauthorized")&&<p className="text-xs text-amber-700 mt-1 bg-amber-50 border border-amber-100 rounded-lg px-2 py-1">
+              ⚠️ Your key is a v1 key. Go to Instantly → Settings → API Keys → Create new API Key (v2) with scopes: campaigns:all + leads:all → paste new key in Settings.
+            </p>}
+          </div>}
         </div>
         {instantlyKey?(
           <button onClick={pushToInstantly} disabled={iPushing} className="flex items-center gap-1.5 px-4 py-2 bg-slate-800 text-white rounded-xl text-xs font-medium hover:bg-slate-700 disabled:opacity-60 flex-shrink-0 whitespace-nowrap">
@@ -1176,19 +1190,43 @@ export default function App(){
     if(settings.supabaseUrl&&settings.supabaseKey) saveConfigToSB(settings.supabaseUrl,settings.supabaseKey,"users",n);
   }
   async function toggleSave(company){
-    const exists=leads.some(l=>l.name===company.name);
-    let next;
-    if(exists){
-      next=leads.filter(l=>l.name!==company.name);
-      if(settings.supabaseUrl&&settings.supabaseKey) sbDeleteRow(settings.supabaseUrl,settings.supabaseKey,"leads","name",company.name);
-    } else {
-      const lead={...company,ownerId:cu.username,ownerName:cu.displayName,activityLog:[]};
-      const withLog=addLog(lead,"saved",cu);
-      next=[...leads,withLog];
-      if(settings.supabaseUrl&&settings.supabaseKey) sbUpsert(settings.supabaseUrl,settings.supabaseKey,"leads",{name:withLog.name,owner_id:withLog.ownerId,owner_name:withLog.ownerName,data:withLog},"name");
-    }
-    setLeads(next);
-    ss(S_LEADS,next);
+    setLeads(prev=>{
+      const exists=prev.some(l=>l.name===company.name);
+      let next;
+      if(exists){
+        next=prev.filter(l=>l.name!==company.name);
+        if(settings.supabaseUrl&&settings.supabaseKey) sbDeleteRow(settings.supabaseUrl,settings.supabaseKey,"leads","name",company.name);
+      } else {
+        const lead={...company,ownerId:cu.username,ownerName:cu.displayName,activityLog:[]};
+        const withLog=addLog(lead,"saved",cu);
+        next=[...prev,withLog];
+        if(settings.supabaseUrl&&settings.supabaseKey) sbUpsert(settings.supabaseUrl,settings.supabaseKey,"leads",{name:withLog.name,owner_id:withLog.ownerId,owner_name:withLog.ownerName,data:withLog},"name");
+      }
+      ss(S_LEADS,next);
+      return next;
+    });
+  }
+  // Batch save: atomically saves multiple leads at once — avoids stale state bug
+  function batchSave(companies){
+    setLeads(prev=>{
+      let next=[...prev];
+      const toSave=[];
+      companies.forEach(company=>{
+        if(!next.some(l=>l.name===company.name)){
+          const lead={...company,ownerId:cu.username,ownerName:cu.displayName,activityLog:[]};
+          const withLog=addLog(lead,"discovered",cu);
+          next.push(withLog);
+          toSave.push(withLog);
+        }
+      });
+      if(toSave.length){
+        ss(S_LEADS,next);
+        if(settings.supabaseUrl&&settings.supabaseKey){
+          toSave.forEach(l=>sbUpsert(settings.supabaseUrl,settings.supabaseKey,"leads",{name:l.name,owner_id:l.ownerId,owner_name:l.ownerName,data:l},"name"));
+        }
+      }
+      return next;
+    });
   }
   function logAct(company,action){setLeads(prev=>{const n=prev.map(l=>{if(l.name!==company.name)return l;const updated=addLog(l,action,cu);if(settings.supabaseUrl&&settings.supabaseKey)sbUpsert(settings.supabaseUrl,settings.supabaseKey,"leads",{name:updated.name,owner_id:updated.ownerId,owner_name:updated.ownerName,data:updated},"name");return updated;});ss(S_LEADS,n);return n;});}
   function isSaved(name){return leads.some(l=>l.name===name);}
@@ -1214,7 +1252,7 @@ export default function App(){
         </div>
       </div>
 
-      {view==="discover"&&<Discover leads={leads} onSave={toggleSave} onEnrich={goEnrich} onOutreach={goOutreach} cu={cu} niches={dynNiches} industries={dynIndustries}/>}
+      {view==="discover"&&<Discover leads={leads} onSave={toggleSave} onBatchSave={batchSave} onEnrich={goEnrich} onOutreach={goOutreach} cu={cu} niches={dynNiches} industries={dynIndustries}/>}
       {view==="saved"&&<Saved leads={leads} onSave={toggleSave} onEnrich={goEnrich} onOutreach={goOutreach} cu={cu}/>}
       {view==="settings"&&isAdmin&&<SettingsView settings={settings} onSave={saveSettings} users={users} onAdd={addUser} onRemove={removeUser} onPwReset={pwReset} cu={cu} niches={dynNiches} industries={dynIndustries} onSaveNiches={saveNiches} onSaveIndustries={saveIndustries}/>}
       {view==="enrich"&&eTarget&&<Enrich company={eTarget} idx={eIdx} onBack={()=>setView("discover")} onOutreach={goOutreach} onSave={toggleSave} isSaved={isSaved(eTarget.name)} cu={cu} settings={settings}/>}
