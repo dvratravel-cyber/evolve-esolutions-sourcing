@@ -182,7 +182,7 @@ async function instantlyCreateCampaign(apiKey,campaignName,contacts,emailSteps){
 async function ai(prompt,search=false){
   const headers={"Content-Type":"application/json","anthropic-dangerous-direct-browser-access":"true"};
   if(_anthropicKey){headers["x-api-key"]=_anthropicKey;headers["anthropic-version"]="2023-06-01";}
-  const body={model:"claude-sonnet-4-20250514",max_tokens:1200,messages:[{role:"user",content:prompt}]};
+  const body={model:"claude-sonnet-4-5",max_tokens:4096,messages:[{role:"user",content:prompt}]};
   if(search)body.tools=[{type:"web_search_20250305",name:"web_search"}];
   const r=await fetch(ANTHROPIC_API,{method:"POST",headers,body:JSON.stringify(body)});
   const d=await r.json();
@@ -615,7 +615,7 @@ Return ONLY valid JSON array, no markdown:
       const m=t.match(/\[[\s\S]*\]/);
       if(m) setResults(JSON.parse(m[0]).map(r=>({...r,searchMode:mode,searchLabel})));
       else setErr("Could not parse results. Try again.");
-    }catch{setErr("Search failed. Check connection.");}
+    }catch(e){setErr(`Search failed: ${e.message||"Check API key in Settings."}`);}
     setLoading(false);
   }
 
