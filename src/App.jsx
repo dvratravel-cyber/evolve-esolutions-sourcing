@@ -705,10 +705,12 @@ Find exactly 3 real companies matching:
 Rules:
 - Return EXACTLY 3 companies (fewer if not enough match)
 - Each must have a verifiable recent signal with month + year
+- CRITICAL: Only include companies where you know the real website URL with certainty (e.g. "taktile.com", "lattice.com"). If you are not sure of the real domain, omit that company entirely — do NOT guess or construct a domain from the company name.
+- The website field must be a clean domain like "company.com" — no https://, no www., no paths.
 - Do not return companies already listed in EXCLUDE above
 - Output ONLY a raw JSON array, no markdown fences, no explanation
 
-[{"name":"Company Name","industry":"","size":"","location":"","website":"","signal":"what happened + Month YYYY","fitScore":82,"fitReason":"why Evolve should call them now"}]`;
+[{"name":"Company Name","industry":"","size":"","location":"","website":"company.com","signal":"what happened + Month YYYY","fitScore":82,"fitReason":"why Evolve should call them now"}]`;
 
     try{
       const t=await ai(prompt,false,800); // no web search — avoids rate limit, Claude knows companies well
@@ -722,9 +724,17 @@ Rules:
       ];
       for(const fn of strategies){try{const r=fn();if(Array.isArray(r)&&r.length){parsed=r;break;}}catch{}}
       if(parsed?.length){
-        // Filter out any existing leads client-side as safety net
-        const fresh=parsed.filter(r=>!leads.some(l=>l.name===r.name));
-        const enriched=fresh.map(r=>({...r,searchMode:mode,searchLabel}));
+        // Filter: must have a real website, and not already a lead
+        const isValidWebsite=w=>w&&w.length>3&&w.includes(".")&&!w.includes(" ");
+        const fresh=parsed.filter(r=>
+          isValidWebsite(r.website) &&
+          !leads.some(l=>l.name===r.name)
+        );
+        if(parsed.length>0&&fresh.length===0){
+          setErr("All results either already exist in your leads or have unverifiable websites. Try a different search.");
+          setLoading(false);return;
+        }
+        const enriched=fresh.map(r=>({...r,website:r.website.replace(/https?:\/\//,"").replace(/^www\./,"").replace(/\/.*/,"").toLowerCase().trim(),searchMode:mode,searchLabel}));
         if(enriched.length){
           setResults(enriched);
           onBatchSave(enriched);
@@ -923,11 +933,12 @@ Return ONLY valid JSON:
     if(!data){setErr("Run AI enrichment first — Apollo overlays contacts on top of the AI research.");return;}
     setLoading(true);setErr("");setData(null);setCached(false);
     try{
-      // Extract clean domain from website or guess from company name
-      let domain=company.website?.replace(/https?:\/\//,"").replace(/\/.*/,"").replace(/^www\./,"")?.toLowerCase()?.trim()||"";
-      if(!domain||domain.length<4){
-        // Fallback: sanitize company name to domain guess
-        domain=company.name.toLowerCase().replace(/[^a-z0-9]/g,"").replace(/inc|llc|ltd|corp|co$/,"").trim()+".com";
+      // Extract clean domain from website — NO guessing from company name
+      const rawSite=company.website?.replace(/https?:\/\//,"").replace(/^www\./,"").replace(/\/.*/,"")?.toLowerCase()?.trim()||"";
+      const domain=rawSite;
+      if(!domain||domain.length<4||!domain.includes(".")){
+        setErr("No verified website found for this company. Add the correct website URL to the lead first, then try Apollo enrichment.");
+        setLoading(false);return;
       }
       console.log("Apollo domain search:",domain);
       // Apollo: fetch contacts only, keep existing AI company data
@@ -977,7 +988,9 @@ Return ONLY valid JSON:
   return(
     <div className="max-w-4xl mx-auto px-6 py-8">
       <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-700 mb-5"><ArrowLeft size={14}/>Back</button>
-      <div className="flex items-center gap-3 mb-6"><Av name={company.name} idx={idx} lg/><div className="flex-1"><div className="flex items-center gap-2"><h1 className="text-xl font-semibold text-slate-800">{company.name}</h1><Score s={company.fitScore}/></div><p className="text-sm text-slate-500">{company.industry} · {company.size} · {company.location}</p></div><div className="flex gap-2"><button onClick={()=>onOutreach(company)} className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white rounded-xl text-sm font-medium hover:bg-emerald-700"><Mail size={14}/>Outreach</button><button onClick={()=>onSave(company)} className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium border transition-all ${isSaved?"bg-slate-800 text-white border-slate-800":"border-slate-200 text-slate-700 hover:border-slate-400"}`}>{isSaved?<><BookmarkCheck size={14}/>Saved</>:<><Bookmark size={14}/>Save</>}</button></div></div>
+      <div className="flex items-center gap-3 mb-6"><Av name={company.name} idx={idx} lg/><div className="flex-1"><div className="flex items-center gap-2"><h1 className="text-xl font-semibold text-slate-800">{company.name}</h1><Score s={company.fitScore}/></div><p className="text-sm text-slate-500">{company.industry} · {company.size} · {company.location}</p>
+        {company.website?<p className="text-xs text-slate-400 flex items-center gap-1"><Globe size={11}/>{company.website}</p>:<p className="text-xs text-amber-600 flex items-center gap-1">⚠️ No verified website — Apollo enrichment unavailable</p>}
+        </div><div className="flex gap-2"><button onClick={()=>onOutreach(company)} className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white rounded-xl text-sm font-medium hover:bg-emerald-700"><Mail size={14}/>Outreach</button><button onClick={()=>onSave(company)} className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium border transition-all ${isSaved?"bg-slate-800 text-white border-slate-800":"border-slate-200 text-slate-700 hover:border-slate-400"}`}>{isSaved?<><BookmarkCheck size={14}/>Saved</>:<><Bookmark size={14}/>Save</>}</button></div></div>
       {!data&&!loading&&<div className="bg-white rounded-2xl border border-slate-200 p-10 text-center">
         <TrendingUp size={36} className="text-slate-300 mx-auto mb-3"/>
         <h2 className="font-semibold text-slate-700 mb-1">Deep company research</h2>
