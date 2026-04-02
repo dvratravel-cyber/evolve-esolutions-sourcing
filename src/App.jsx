@@ -157,30 +157,29 @@ async function sbSaveOutreach(url,key,leadName,ownerId,sequenceType,steps,campai
   await sbReq(`${url}/rest/v1/outreach`,key,"POST",record,true);
 }
 
-// ── Apollo.io enrichment ──
+// ── Apollo.io enrichment (via Vercel proxy — Apollo blocks direct browser calls) ──
+async function apolloProxy(apiKey,target,body=null){
+  const r=await fetch("/api/apollo",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({target,body,apiKey}),
+  });
+  const data=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error(data.error||`Apollo error ${r.status}`);
+  return data;
+}
 async function apolloEnrichCompany(domain,apiKey){
   if(!apiKey)throw new Error("No Apollo API key");
-  const r=await fetch(`https://api.apollo.io/api/v1/organizations/enrich?domain=${domain}`,{
-    headers:{"Content-Type":"application/json","Cache-Control":"no-cache","X-Api-Key":apiKey},
-  });
-  if(!r.ok)throw new Error(`Apollo error ${r.status}`);
-  return r.json();
+  return apolloProxy(apiKey,`/api/v1/organizations/enrich?domain=${domain}`);
 }
 async function apolloFindContacts(domain,apiKey){
   if(!apiKey)throw new Error("No Apollo API key");
-  // Try multiple title combinations for best coverage
-  const r=await fetch("https://api.apollo.io/api/v1/mixed_people/search",{
-    method:"POST",
-    headers:{"Content-Type":"application/json","X-Api-Key":apiKey},
-    body:JSON.stringify({
-      q_organization_domains:[domain],
-      person_titles:["HR Director","Head of Talent","VP Engineering","CTO","CIO","People Operations","Talent Acquisition","Technical Recruiter","Hiring Manager","Head of HR","Chief People Officer"],
-      per_page:5,
-      page:1,
-    }),
+  return apolloProxy(apiKey,"/api/v1/mixed_people/search",{
+    q_organization_domains:[domain],
+    person_titles:["HR Director","Head of Talent","VP of Engineering","CTO","CIO","People Operations","Talent Acquisition","Technical Recruiter","Hiring Manager","Head of HR","Chief People Officer","VP HR","Director of Engineering","Head of People","Director of HR"],
+    per_page:5,
+    page:1,
   });
-  if(!r.ok)throw new Error(`Apollo error ${r.status}: ${await r.text()}`);
-  return r.json();
 }
 
 // ── Instantly.ai v2 campaign push (via Vercel proxy to avoid CORS) ──
@@ -918,9 +917,14 @@ Return ONLY valid JSON:
       }
       console.log("Apollo domain search:",domain);
       // Apollo: fetch contacts only, keep existing AI company data
-      const peopleRes=await apolloFindContacts(domain,apolloKey).catch((e)=>{console.error("Apollo error:",e);return null;});
+      let peopleRes=null;
+      try{ peopleRes=await apolloFindContacts(domain,apolloKey); }
+      catch(e){ setErr(`Apollo failed: ${e.message}`);setLoading(false);return; }
       const people=(peopleRes?.people||[]).slice(0,3);
-      if(!people.length){setErr("No contacts found via Apollo for this domain.");setLoading(false);return;}
+      if(!people.length){
+        setErr(`No contacts found on Apollo for domain: ${domain}. Check the domain is correct or try a different company.`);
+        setLoading(false);return;
+      }
       const apolloContacts=people.map(p=>({
         name:`${p.first_name||""} ${p.last_name||""}`.trim()||"Unknown",
         title:p.title||"",
