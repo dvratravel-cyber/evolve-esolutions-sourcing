@@ -284,7 +284,7 @@ function Login({onLogin}){
           </div>
           {err&&<div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 border border-red-100 rounded-xl px-3 py-2 mb-4"><AlertCircle size={14}/>{err}</div>}
           <button onClick={submit} disabled={loading} className="w-full py-3 rounded-xl bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 flex items-center justify-center gap-2 disabled:opacity-60">{loading?<><Loader2 size={15} className="animate-spin"/>Signing in...</>:"Sign in"}</button>
-          <p className="text-xs text-slate-400 text-center mt-4">Usernames starting with <code className="bg-slate-100 px-1 rounded">evadmin</code> get admin access</p>
+
         </div>
 
       </div>
@@ -797,47 +797,36 @@ function Enrich({company,idx,onBack,onOutreach,onSave,isSaved,cu,settings}){
     const prompt=`Business intelligence for Evolve ESolutions. Research ${company.name} (${company.website||company.industry}, ${company.location}).
 CRITICAL: Find and CLASSIFY contacts. Email: "Work" (company domain) or "Personal" (gmail etc.). Phone: "Direct", "Mobile", "Office", or "HQ".
 Return ONLY valid JSON:
-{"description":"2-sentence overview","founded":"year","headcount":"estimate","revenue":"estimate or Private","funding":"round or Bootstrapped","recentNews":["3 items with dates"],"techStack":["3-5 tech"],"hiringRoles":["3-4 areas"],"keyContacts":[{"name":"","title":"","email":"","emailType":"Work or Personal","phone":"","phoneType":"Direct or Mobile or Office or HQ or Not found","linkedin":""},{"name":"","title":"","email":"","emailType":"","phone":"","phoneType":"","linkedin":""}],"painPoints":["2-3 points"],"approachAngle":"one specific angle for Evolve ESolutions"}`;
+{"description":"2-sentence overview","founded":"year","headcount":"estimate","revenue":"estimate or Private","funding":"round or Bootstrapped","recentNews":["3 items with dates"],"techStack":["3-5 tech"],"hiringRoles":["3-4 areas"],"keyContacts":[{"name":"","title":"","email":"","emailType":"Work or Personal","phone":"","phoneType":"Direct or Mobile or Office or HQ or Not found","linkedin":"","source":"AI"},{"name":"","title":"","email":"","emailType":"","phone":"","phoneType":"","linkedin":"","source":"AI"}],"painPoints":["2-3 points"],"approachAngle":"one specific angle for Evolve ESolutions","enrichmentSource":"AI"}`;
     try{const t=await ai(prompt,false);const clean=t.replace(/```json\n?/g,"").replace(/```\n?/g,"").trim();const m=clean.match(/\{[\s\S]*\}/);if(m){const d=JSON.parse(m[0]);setData(d);await ss(`enr_${slug}`,d);if(sbUrl&&sbKey)sbSaveEnrichment(sbUrl,sbKey,slug,company.name,d);}else setErr("Parse failed. Try again.");}catch(e){setErr(`Enrichment failed: ${e.message}`);}setLoading(false);
   }
   async function enrichWithApollo(){
     if(!apolloKey){setErr("Add Apollo API key in Settings first.");return;}
+    if(!data){setErr("Run AI enrichment first — Apollo overlays contacts on top of the AI research.");return;}
     setLoading(true);setErr("");setData(null);setCached(false);
     try{
       const domain=company.website?.replace(/https?:\/\//,"").replace(/\/.*/,"")
         ||company.name.toLowerCase().replace(/\s+/g,"")+".com";
-      const [orgRes,peopleRes]=await Promise.all([
-        apolloEnrichCompany(domain,apolloKey).catch(()=>null),
-        apolloFindContacts(domain,apolloKey).catch(()=>null),
-      ]);
-      const org=orgRes?.organization||{};
-      const people=(peopleRes?.people||[]).slice(0,2);
-      const parsed={
-        description:org.short_description||`${company.name} is a ${company.industry} company based in ${company.location}.`,
-        founded:org.founded_year||"Unknown",
-        headcount:org.estimated_num_employees?`~${org.estimated_num_employees}`:"Unknown",
-        revenue:org.annual_revenue_printed||"Private",
-        funding:org.latest_funding_round_type||"Unknown",
-        recentNews:(org.recent_news||[]).slice(0,3).map(n=>n.headline||n.title||"Recent news"),
-        techStack:(org.technologies||[]).slice(0,5).map(t=>t.name||t),
-        hiringRoles:[],
-        keyContacts:people.map(p=>({
-          name:`${p.first_name||""} ${p.last_name||""}`.trim()||"Unknown",
-          title:p.title||"",
-          email:p.email||"Not found",
-          emailType:p.email?.includes(domain)?"Work":"Unknown",
-          phone:p.phone_numbers?.[0]?.raw_number||"Not found",
-          phoneType:p.phone_numbers?.[0]?.type||"Not found",
-          linkedin:p.linkedin_url||"",
-        })),
-        painPoints:[],
-        approachAngle:"",
-        source:"apollo",
-      };
-      setData(parsed);
-      await ss(`enr_${slug}`,parsed);
-      if(sbUrl&&sbKey)sbSaveEnrichment(sbUrl,sbKey,slug,company.name,parsed);
-    }catch(e){setErr(`Apollo enrichment failed: ${e.message}`);}
+      // Apollo: fetch contacts only, keep existing AI company data
+      const peopleRes=await apolloFindContacts(domain,apolloKey).catch(()=>null);
+      const people=(peopleRes?.people||[]).slice(0,3);
+      if(!people.length){setErr("No contacts found via Apollo for this domain.");setLoading(false);return;}
+      const apolloContacts=people.map(p=>({
+        name:`${p.first_name||""} ${p.last_name||""}`.trim()||"Unknown",
+        title:p.title||"",
+        email:p.email||"Not found",
+        emailType:p.email?.includes(domain)?"Work":"Unknown",
+        phone:p.phone_numbers?.[0]?.raw_number||"Not found",
+        phoneType:p.phone_numbers?.[0]?.type||"Not found",
+        linkedin:p.linkedin_url||"",
+        source:"Apollo",
+      }));
+      // Merge: keep all AI company data, overlay Apollo contacts
+      const merged={...(data||{}),keyContacts:apolloContacts,enrichmentSource:"Apollo (contacts)"};
+      setData(merged);
+      await ss(`enr_${slug}`,merged);
+      if(sbUrl&&sbKey)sbSaveEnrichment(sbUrl,sbKey,slug,company.name,merged);
+    }catch(e){setErr(`Apollo contact enrichment failed: ${e.message}`);}
     setLoading(false);
   }
   const CC=({c,i})=>{
@@ -845,7 +834,7 @@ Return ONLY valid JSON:
     function copy(v,f){if(!v||v==="Not found")return;navigator.clipboard.writeText(v);setCp(f);setTimeout(()=>setCp(""),2000);}
     return(
       <div className="bg-slate-50 rounded-xl p-4 border border-slate-100">
-        <div className="flex items-center gap-3 mb-3"><div className={`w-9 h-9 rounded-xl flex items-center justify-center font-semibold text-sm ${PALETTES[i%PALETTES.length]}`}>{c.name.split(" ").slice(0,2).map(w=>w[0]).join("").toUpperCase()}</div><div className="flex-1"><div className="text-sm font-semibold text-slate-800">{c.name}</div><div className="text-xs text-slate-500">{c.title}</div></div></div>
+        <div className="flex items-center gap-3 mb-3"><div className={`w-9 h-9 rounded-xl flex items-center justify-center font-semibold text-sm ${PALETTES[i%PALETTES.length]}`}>{c.name.split(" ").slice(0,2).map(w=>w[0]).join("").toUpperCase()}</div><div className="flex-1"><div className="flex items-center gap-2"><span className="text-sm font-semibold text-slate-800">{c.name}</span>{c.source&&<span className={`text-xs px-1.5 py-0.5 rounded font-medium ${c.source==="Apollo"?"bg-blue-50 text-blue-700":"bg-violet-50 text-violet-700"}`}>{c.source}</span>}</div><div className="text-xs text-slate-500">{c.title}</div></div></div>
         <div className="space-y-2">
           <div className="flex items-center gap-2"><Mail size={13} className="text-slate-400 flex-shrink-0"/><span className="text-xs text-slate-700 flex-1 truncate">{c.email||"—"}</span>{c.emailType&&<CtBadge label={c.emailType}/>}{c.email&&c.email!=="Not found"&&<button onClick={()=>copy(c.email,"e"+i)} className="text-xs text-slate-400 hover:text-slate-600 px-2 py-0.5 rounded border border-slate-200 flex-shrink-0">{cp==="e"+i?"✓":"Copy"}</button>}</div>
           <div className="flex items-center gap-2"><Phone size={13} className="text-slate-400 flex-shrink-0"/>{c.phone&&c.phone!=="Not found"?<a href={`tel:${c.phone.replace(/\s/g,"")}`} className="text-xs text-emerald-700 hover:underline flex-1">{c.phone}</a>:<span className="text-xs text-slate-400 italic flex-1">Not found</span>}{c.phoneType&&c.phoneType!=="Not found"&&<CtBadge label={c.phoneType}/>}{c.phone&&c.phone!=="Not found"&&<button onClick={()=>copy(c.phone,"p"+i)} className="text-xs text-slate-400 hover:text-slate-600 px-2 py-0.5 rounded border border-slate-200 flex-shrink-0">{cp==="p"+i?"✓":"Copy"}</button>}</div>
@@ -861,17 +850,24 @@ Return ONLY valid JSON:
       {!data&&!loading&&<div className="bg-white rounded-2xl border border-slate-200 p-10 text-center">
         <TrendingUp size={36} className="text-slate-300 mx-auto mb-3"/>
         <h2 className="font-semibold text-slate-700 mb-1">Deep company research</h2>
-        <p className="text-sm text-slate-500 mb-6 max-w-sm mx-auto">Classified emails (Work/Personal), phones (Direct/Mobile/Office/HQ), key contacts, news, tech stack, and a tailored approach angle.</p>
-        <div className="flex items-center justify-center gap-3 flex-wrap">
-          <button onClick={enrich} className="px-6 py-3 bg-violet-600 text-white rounded-xl text-sm font-medium hover:bg-violet-700 flex items-center gap-2"><Zap size={15}/>AI enrichment</button>
-          {apolloKey&&<button onClick={enrichWithApollo} className="px-6 py-3 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700 flex items-center gap-2"><Users size={15}/>Apollo enrichment</button>}
-          {!apolloKey&&<div className="flex items-center gap-2 text-xs text-slate-400 border border-dashed border-slate-200 rounded-xl px-4 py-3"><Users size={13}/>Apollo enrichment — add API key in Settings to unlock</div>}
-        </div>
+        <p className="text-sm text-slate-500 mb-6 max-w-sm mx-auto">AI researches the company and surfaces contacts, news, tech stack and a tailored approach angle. Then optionally overlay verified contacts from Apollo.</p>
+        <button onClick={enrich} className="px-6 py-3 bg-violet-600 text-white rounded-xl text-sm font-medium hover:bg-violet-700 flex items-center gap-2 mx-auto"><Zap size={15}/>Run AI enrichment</button>
       </div>}
       {loading&&<div className="bg-white rounded-2xl border border-slate-200 p-10 text-center"><Loader2 size={28} className="animate-spin text-violet-500 mx-auto mb-3"/><p className="text-sm text-slate-500 mb-1">Researching {company.name}…</p><p className="text-xs text-slate-400">Classifying contacts — 20–30 seconds.</p></div>}
       {err&&<div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 border border-red-100 rounded-xl px-4 py-3 mb-4"><AlertCircle size={14}/>{err}</div>}
       {data&&<div className="space-y-4">
-        <div className={`flex items-center justify-between px-4 py-2.5 rounded-xl border ${cached?"bg-indigo-50 border-indigo-100":"bg-emerald-50 border-emerald-100"}`}><div className="flex items-center gap-2"><CheckCircle2 size={14} className={cached?"text-indigo-500":"text-emerald-500"}/><span className={`text-xs font-medium ${cached?"text-indigo-700":"text-emerald-700"}`}>{cached?"Loaded from saved enrichment.":"Enrichment complete and saved."}</span></div><button onClick={enrich} className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-700 px-2 py-1 rounded-lg border border-slate-200 bg-white"><RefreshCw size={11}/>Re-run</button></div>
+        <div className={`flex items-center justify-between px-4 py-2.5 rounded-xl border ${cached?"bg-indigo-50 border-indigo-100":"bg-emerald-50 border-emerald-100"}`}>
+        <div className="flex items-center gap-2">
+          <CheckCircle2 size={14} className={cached?"text-indigo-500":"text-emerald-500"}/>
+          <span className={`text-xs font-medium ${cached?"text-indigo-700":"text-emerald-700"}`}>
+            {cached?"Loaded from cache":"Enriched"} · Source: <span className="font-semibold">{data.enrichmentSource||"AI"}</span>
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          {apolloKey&&<button onClick={enrichWithApollo} className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 px-2 py-1 rounded-lg border border-blue-200 bg-blue-50"><Users size={11}/>Overlay Apollo contacts</button>}
+          <button onClick={enrich} className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-700 px-2 py-1 rounded-lg border border-slate-200 bg-white"><RefreshCw size={11}/>Re-run AI</button>
+        </div>
+      </div>
         <div className="bg-white rounded-2xl border border-slate-200 p-5"><h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Overview</h3><p className="text-sm text-slate-700 leading-relaxed mb-4">{data.description}</p><div className="grid grid-cols-4 gap-3">{[["Founded",data.founded],["Headcount",data.headcount],["Revenue",data.revenue],["Funding",data.funding]].map(([l,v])=><div key={l} className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400 mb-1">{l}</div><div className="text-sm font-semibold text-slate-800">{v||"—"}</div></div>)}</div></div>
         <div className="bg-white rounded-2xl border border-slate-200 p-5"><div className="flex items-center justify-between mb-3"><h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide flex items-center gap-1.5"><Users size={13}/>Key contacts — classified</h3><div className="flex gap-1.5">{["Work","Personal","Direct","Mobile"].map(l=><CtBadge key={l} label={l}/>)}</div></div><div className="grid grid-cols-2 gap-3">{(data.keyContacts||[]).map((c,i)=><CC key={i} c={c} i={i}/>)}</div></div>
         <div className="grid grid-cols-2 gap-4">
