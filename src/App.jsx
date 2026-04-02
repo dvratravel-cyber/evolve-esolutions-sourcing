@@ -174,12 +174,26 @@ async function apolloEnrichCompany(domain,apiKey){
 }
 async function apolloFindContacts(domain,apiKey){
   if(!apiKey)throw new Error("No Apollo API key");
-  return apolloProxy(apiKey,"/api/v1/mixed_people/search",{
+  // Step 1: Search for people at domain (new api_search endpoint — returns ID/name/title/LinkedIn, no email)
+  const searchRes=await apolloProxy(apiKey,"/api/v1/mixed_people/api_search",{
     q_organization_domains:[domain],
     person_titles:["HR Director","Head of Talent","VP of Engineering","CTO","CIO","People Operations","Talent Acquisition","Technical Recruiter","Hiring Manager","Head of HR","Chief People Officer","VP HR","Director of Engineering","Head of People","Director of HR"],
     per_page:5,
     page:1,
   });
+  const found=(searchRes?.people||[]).slice(0,3);
+  if(!found.length)return {people:[]};
+  // Step 2: Enrich each person individually to get their verified work email
+  const enriched=await Promise.all(found.map(async p=>{
+    try{
+      const res=await apolloProxy(apiKey,`/api/v1/people/match?id=${p.id}`);
+      const ep=res?.person||{};
+      return {...p,email:ep.email||null,phone:ep.phone_numbers?.[0]?.raw_number||null};
+    }catch{
+      return {...p,email:null,phone:null};
+    }
+  }));
+  return {people:enriched};
 }
 
 // ── Instantly.ai v2 campaign push (via Vercel proxy to avoid CORS) ──
