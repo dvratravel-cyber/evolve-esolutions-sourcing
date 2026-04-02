@@ -5,7 +5,7 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const { target, body, apiKey, method = 'POST' } = req.body;
+  const { target, body, apiKey, method = 'POST' } = req.body || {};
   if (!target || !apiKey) return res.status(400).json({ error: 'Missing target or apiKey' });
 
   try {
@@ -17,9 +17,21 @@ export default async function handler(req, res) {
       },
       body: body ? JSON.stringify(body) : undefined,
     });
+
     const text = await response.text();
-    const data = text ? JSON.parse(text) : {};
-    return res.status(response.ok ? 200 : response.status).json(data);
+    let data = {};
+    try { data = JSON.parse(text); } catch { data = { raw: text }; }
+
+    if (!response.ok) {
+      // Return the full error for debugging
+      return res.status(response.status).json({
+        error: data.message || data.error || `Instantly API error ${response.status}`,
+        details: data,
+        status: response.status,
+        target,
+      });
+    }
+    return res.status(200).json(data);
   } catch (error) {
     return res.status(500).json({ error: error.message });
   }
