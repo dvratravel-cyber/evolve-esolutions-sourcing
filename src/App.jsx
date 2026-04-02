@@ -184,6 +184,14 @@ async function apolloFindContacts(domain,apiKey){
 }
 
 // ── Instantly.ai v2 campaign push (via Vercel proxy to avoid CORS) ──
+// Convert plain text email body to HTML so Instantly preserves line breaks and paragraphs
+function emailToHtml(text){
+  if(!text)return "";
+  return text
+    .split(/\n\n+/) // split on blank lines = paragraph breaks
+    .map(para=>`<p>${para.replace(/\n/g,"<br>")}</p>`) // single newlines = <br>
+    .join("");
+}
 // NOTE: Requires a v2 API key — Instantly → Settings → API Keys → Create Key (scopes: campaigns:all + leads:all)
 async function instantlyProxy(apiKey,target,body,method="POST"){
   const r=await fetch("/api/instantly",{
@@ -205,7 +213,7 @@ async function instantlyCreateCampaign(apiKey,campaignName,contacts,emailSteps){
   const steps=emailSteps.map((s,i)=>({
     type:"email",
     delay:i===0?0:Math.max(1,((emailSteps[i].day||1)-(emailSteps[i-1].day||1))),
-    variants:[{subject:s.subject||"Following up",body:s.body||""}],
+    variants:[{subject:s.subject||"Following up",body:emailToHtml(s.body||"")}],
   }));
 
   // Step 1: Create campaign with sequences embedded (v2 format)
