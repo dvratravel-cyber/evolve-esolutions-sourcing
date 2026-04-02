@@ -239,14 +239,15 @@ async function instantlyCreateCampaign(apiKey,campaignName,contacts,emailSteps){
 }
 
 // ── Claude AI ──
-async function ai(prompt,search=false){
+async function ai(prompt,search=false,maxTokens=1024){
   const headers={"Content-Type":"application/json","anthropic-dangerous-direct-browser-access":"true"};
   if(_anthropicKey){headers["x-api-key"]=_anthropicKey;headers["anthropic-version"]="2023-06-01";}
-  const body={model:"claude-sonnet-4-5",max_tokens:4096,messages:[{role:"user",content:prompt}]};
+  const body={model:"claude-sonnet-4-5",max_tokens:maxTokens,messages:[{role:"user",content:prompt}]};
   if(search)body.tools=[{type:"web_search_20250305",name:"web_search"}];
   const r=await fetch(ANTHROPIC_API,{method:"POST",headers,body:JSON.stringify(body)});
   const d=await r.json();
   if(d.error)throw new Error(d.error.message||"API error");
+  // Extract all text blocks (web search may interleave tool_use and text blocks)
   return d.content?.filter(b=>b.type==="text").map(b=>b.text).join("")||"";
 }
 
@@ -670,27 +671,45 @@ function Discover({leads,onSave,onBatchSave,onEnrich,onOutreach,cu,niches:dynNic
     const sixMonthsAgo=new Date(now);sixMonthsAgo.setMonth(now.getMonth()-6);
     const sinceDate=sixMonthsAgo.toLocaleDateString("en-US",{month:"long",year:"numeric"});
     const currentDate=now.toLocaleDateString("en-US",{month:"long",year:"numeric"});
-    const prompt=`Search the web and find 5 real companies for Evolve ESolutions (IT/HR/Healthcare/Legal recruitment agency, Pleasanton CA) that match:
+    // Existing leads to exclude
+    const existingNames=leads.map(l=>l.name).filter(Boolean);
+    const excludeClause=existingNames.length>0?`\nEXCLUDE these companies (already in our leads): ${existingNames.join(", ")}`:""
+    const prompt=`You are a B2B sales researcher for Evolve ESolutions (IT/HR/Healthcare/Legal/Financial Services recruitment, Pleasanton CA).
+
+Find exactly 3 real companies matching:
 - ${target}
 - Size: ${size||"any"} | Location: ${loc||"any"} | Signal: ${sig}
+- Buying signal must be from ${sinceDate} to ${currentDate} (last 6 months only)${excludeClause}
 
-MANDATORY: Each company MUST have a real, verifiable buying signal from ${sinceDate} to ${currentDate} only. Search for recent news, job postings, funding announcements, or leadership changes from this period. Do NOT use signals older than ${sinceDate}.
+Rules:
+- Return EXACTLY 3 companies (fewer if not enough match)
+- Each must have a verifiable recent signal with month + year
+- Do not return companies already listed in EXCLUDE above
+- Output ONLY a raw JSON array, no markdown fences, no explanation
 
-Return ONLY a JSON array, no markdown:
-[{"name":"","industry":"","size":"","location":"","website":"","signal":"exactly what happened + month year","fitScore":80,"fitReason":"one sentence why Evolve should reach out now"}]`;
+[{"name":"Company Name","industry":"","size":"","location":"","website":"","signal":"what happened + Month YYYY","fitScore":82,"fitReason":"why Evolve should call them now"}]`;
 
     try{
-      const t=await ai(prompt,true); // web search enabled for real recent signals
-      // Try to extract JSON array - handle plain JSON or markdown code blocks
+      const t=await ai(prompt,false,800); // no web search — avoids rate limit, Claude knows companies well
+      // Robust JSON extraction — try multiple strategies
       let parsed=null;
-      const clean=t.replace(/```json\n?/g,"").replace(/```\n?/g,"").trim();
-      const m=clean.match(/\[[\s\S]*\]/);
-      if(m){try{parsed=JSON.parse(m[0]);}catch{}}
+      const strategies=[
+        ()=>JSON.parse(t.trim()),
+        ()=>JSON.parse(t.replace(/```json\n?/g,"").replace(/```\n?/g,"").trim()),
+        ()=>{const m=t.match(/\[[\s\S]*?\]/);return m?JSON.parse(m[0]):null;},
+        ()=>{const m=t.match(/\[\s*\{[\s\S]*?\}\s*\]/);return m?JSON.parse(m[0]):null;},
+      ];
+      for(const fn of strategies){try{const r=fn();if(Array.isArray(r)&&r.length){parsed=r;break;}}catch{}}
       if(parsed?.length){
-        const enriched=parsed.map(r=>({...r,searchMode:mode,searchLabel}));
-        setResults(enriched);
-        // Auto-save all new leads in one atomic batch
-        onBatchSave(enriched);
+        // Filter out any existing leads client-side as safety net
+        const fresh=parsed.filter(r=>!leads.some(l=>l.name===r.name));
+        const enriched=fresh.map(r=>({...r,searchMode:mode,searchLabel}));
+        if(enriched.length){
+          setResults(enriched);
+          onBatchSave(enriched);
+        } else {
+          setErr("All results already exist in your leads. Try a different search.");
+        }
       } else setErr("Could not parse results. Try again.");
     }catch(e){setErr(`Search failed: ${e.message||"Check API key in Settings."}`);}
     setLoading(false);
@@ -994,13 +1013,14 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
   async function gen(s,t){
     setStep(s);setEType(t||"intro");setContent("");setLoading(true);
     try{
-      const txt=await ai(prompts[t||"intro"]||prompts.intro);
+      const txt=await ai(prompts[t||"intro"]||prompts.intro,false,600); // 600 tokens is plenty for short emails
       setContent(txt);
       // Parse subject and body
       const lines=txt.split("\n");
       const subLine=lines.find(l=>l.toLowerCase().startsWith("subject:"))||"Subject: Quick follow-up";
       const subj=subLine.replace(/^subject:\s*/i,"").trim();
-      const body=lines.slice(lines.indexOf(subLine)+2).join("\n").trim();
+      const bodyLines=lines.slice(lines.indexOf(subLine)+2);
+      const body=bodyLines.join("\n").trim();
       // Store in generatedSteps map so Push to Instantly can use without re-generating
       setGeneratedSteps(prev=>({...prev,[s.label]:{subject:subj,body,day:s.day,label:s.label}}));
       onLogAct(company,"outreach generated");
@@ -1008,7 +1028,7 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
       if(settings?.supabaseUrl&&settings?.supabaseKey){
         sbSaveOutreach(settings.supabaseUrl,settings.supabaseKey,company.name,cu.username,tmpl.id,[{day:s.day,label:s.label,subject:subj,body}]);
       }
-    }catch{setContent("Error. Try again.");}
+    }catch(e){setContent(`Error: ${e.message||"Check API key in Settings."}`);}
     setLoading(false);
   }
 
