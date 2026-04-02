@@ -601,19 +601,23 @@ function Discover({leads,onSave,onEnrich,onOutreach,cu,niches:dynNiches,industri
   async function search(){
     if(!canSearch)return;setLoading(true);setResults([]);setErr("");
     const sig=sigs.length?sigs.join(", "):"actively hiring or growing";
-    const target=mode==="industry"?`Industry: ${industry}`:`Niche: ${selectedNiche.label}${subNiche?`, specifically looking for companies needing talent in: ${subNiche}`:""}`;
+    const target=mode==="industry"?`Industry: ${industry}`:`Niche: ${selectedNiche.label}${subNiche?`, sub-niche: ${subNiche}`:""}`;
+    const prompt=`You are a B2B sales researcher for Evolve ESolutions (IT/HR/Healthcare/Legal recruitment, Pleasanton CA).
+List 5 real companies that match:
+- ${target}
+- Size: ${size||"any"} | Location: ${loc||"any"} | Signal: ${sig}
+
+Return ONLY a JSON array (no markdown, no explanation):
+[{"name":"","industry":"","size":"","location":"","website":"","signal":"specific hiring/growth signal","fitScore":80,"fitReason":"why Evolve should contact them"}]`;
 
     try{
-      const t=await ai(`B2B sales researcher for Evolve ESolutions, a specialist recruitment agency. Search web for 5 real companies matching:
-${target}
-Company size: ${size||"any"}
-Location: ${loc||"any"}
-Buying signals: ${sig}
-
-Return ONLY valid JSON array, no markdown:
-[{"name":"","industry":"","size":"","location":"","website":"","signal":"specific recent evidence with date if possible","fitScore":85,"fitReason":"one sentence why Evolve ESolutions should approach them for ${mode==="niche"?(selectedNiche?.label||"this niche"):"recruitment"}"}]`,true);
-      const m=t.match(/\[[\s\S]*\]/);
-      if(m) setResults(JSON.parse(m[0]).map(r=>({...r,searchMode:mode,searchLabel})));
+      const t=await ai(prompt,false);
+      // Try to extract JSON array - handle plain JSON or markdown code blocks
+      let parsed=null;
+      const clean=t.replace(/```json\n?/g,"").replace(/```\n?/g,"").trim();
+      const m=clean.match(/\[[\s\S]*\]/);
+      if(m){try{parsed=JSON.parse(m[0]);}catch{}}
+      if(parsed?.length) setResults(parsed.map(r=>({...r,searchMode:mode,searchLabel})));
       else setErr("Could not parse results. Try again.");
     }catch(e){setErr(`Search failed: ${e.message||"Check API key in Settings."}`);}
     setLoading(false);
@@ -794,7 +798,7 @@ function Enrich({company,idx,onBack,onOutreach,onSave,isSaved,cu,settings}){
 CRITICAL: Find and CLASSIFY contacts. Email: "Work" (company domain) or "Personal" (gmail etc.). Phone: "Direct", "Mobile", "Office", or "HQ".
 Return ONLY valid JSON:
 {"description":"2-sentence overview","founded":"year","headcount":"estimate","revenue":"estimate or Private","funding":"round or Bootstrapped","recentNews":["3 items with dates"],"techStack":["3-5 tech"],"hiringRoles":["3-4 areas"],"keyContacts":[{"name":"","title":"","email":"","emailType":"Work or Personal","phone":"","phoneType":"Direct or Mobile or Office or HQ or Not found","linkedin":""},{"name":"","title":"","email":"","emailType":"","phone":"","phoneType":"","linkedin":""}],"painPoints":["2-3 points"],"approachAngle":"one specific angle for Evolve ESolutions"}`;
-    try{const t=await ai(prompt,true);const m=t.match(/\{[\s\S]*\}/);if(m){const d=JSON.parse(m[0]);setData(d);await ss(`enr_${slug}`,d);if(sbUrl&&sbKey)sbSaveEnrichment(sbUrl,sbKey,slug,company.name,d);}else setErr("Parse failed. Try again.");}catch{setErr("Enrichment failed.");}setLoading(false);
+    try{const t=await ai(prompt,false);const clean=t.replace(/```json\n?/g,"").replace(/```\n?/g,"").trim();const m=clean.match(/\{[\s\S]*\}/);if(m){const d=JSON.parse(m[0]);setData(d);await ss(`enr_${slug}`,d);if(sbUrl&&sbKey)sbSaveEnrichment(sbUrl,sbKey,slug,company.name,d);}else setErr("Parse failed. Try again.");}catch(e){setErr(`Enrichment failed: ${e.message}`);}setLoading(false);
   }
   async function enrichWithApollo(){
     if(!apolloKey){setErr("Add Apollo API key in Settings first.");return;}
