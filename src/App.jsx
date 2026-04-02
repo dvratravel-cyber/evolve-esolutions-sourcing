@@ -61,10 +61,11 @@ async function ss(k,v){
 let _anthropicKey="";
 
 // ── Supabase config helpers ──
-async function sbReq(url,key,method="GET",body=null){
-  const opts={method,headers:{"apikey":key,"Authorization":`Bearer ${key}`,"Content-Type":"application/json","Prefer":"return=representation"}};
+async function sbReq(url,key,method="GET",body=null,upsert=false){
+  const prefer=upsert?"return=representation,resolution=merge-duplicates":"return=representation";
+  const opts={method,headers:{"apikey":key,"Authorization":`Bearer ${key}`,"Content-Type":"application/json","Prefer":prefer}};
   if(body)opts.body=JSON.stringify(body);
-  try{const r=await fetch(url,opts);if(!r.ok)return null;return await r.json();}catch{return null;}
+  try{const r=await fetch(url,opts);if(!r.ok)return null;const t=await r.text();return t?JSON.parse(t):[];}catch{return null;}
 }
 async function loadConfigFromSB(url,key){
   if(!url||!key)return null;
@@ -77,6 +78,56 @@ async function saveConfigToSB(url,key,configKey,value){
   if(!url||!key)return;
   await sbReq(`${url}/rest/v1/config?key=eq.${configKey}`,key,"DELETE");
   await sbReq(`${url}/rest/v1/config`,key,"POST",{key:configKey,value:JSON.stringify(value)});
+}
+
+// ── Supabase entity helpers ──
+async function sbUpsert(url,key,table,record,conflict){
+  try{
+    const r=await fetch(`${url}/rest/v1/${table}?on_conflict=${conflict}`,{
+      method:"POST",
+      headers:{"apikey":key,"Authorization":`Bearer ${key}`,"Content-Type":"application/json","Prefer":"resolution=merge-duplicates,return=representation"},
+      body:JSON.stringify(record)
+    });
+    return r.ok;
+  }catch{return false;}
+}
+async function sbDeleteRow(url,key,table,column,value){
+  try{await fetch(`${url}/rest/v1/${table}?${column}=eq.${encodeURIComponent(value)}`,{method:"DELETE",headers:{"apikey":key,"Authorization":`Bearer ${key}`}});}catch{}
+}
+async function sbGetAll(url,key,table){
+  const rows=await sbReq(`${url}/rest/v1/${table}?select=*`,key);
+  return rows||[];
+}
+
+// ── Supabase leads ──
+async function sbLoadLeads(url,key){
+  if(!url||!key)return null;
+  const rows=await sbReq(`${url}/rest/v1/leads?select=*&order=created_at.asc`,key);
+  if(!rows?.length)return null;
+  return rows.map(r=>({...r.data,name:r.name,ownerId:r.owner_id,ownerName:r.owner_name}));
+}
+async function sbSaveLead(url,key,lead){
+  if(!url||!key)return;
+  await sbReq(`${url}/rest/v1/leads`,key,"POST",{name:lead.name,owner_id:lead.ownerId||"",owner_name:lead.ownerName||"",data:lead},true);
+}
+async function sbUpdateLead(url,key,lead){
+  if(!url||!key)return;
+  await sbReq(`${url}/rest/v1/leads?name=eq.${encodeURIComponent(lead.name)}`,key,"PATCH",{data:lead,owner_id:lead.ownerId||"",owner_name:lead.ownerName||""});
+}
+async function sbDeleteLead(url,key,name){
+  if(!url||!key)return;
+  await sbReq(`${url}/rest/v1/leads?name=eq.${encodeURIComponent(name)}`,key,"DELETE");
+}
+
+// ── Supabase enrichments ──
+async function sbLoadEnrichment(url,key,slug){
+  if(!url||!key)return null;
+  const rows=await sbReq(`${url}/rest/v1/enrichments?slug=eq.${slug}&select=data`,key);
+  return rows?.[0]?.data||null;
+}
+async function sbSaveEnrichment(url,key,slug,company,data){
+  if(!url||!key)return;
+  await sbReq(`${url}/rest/v1/enrichments`,key,"POST",{slug,company,data},true);
 }
 
 // ── Apollo.io enrichment ──
@@ -129,7 +180,7 @@ async function instantlyCreateCampaign(apiKey,campaignName,contacts,emailSteps){
 
 // ── Claude AI ──
 async function ai(prompt,search=false){
-  const headers={"Content-Type":"application/json"};
+  const headers={"Content-Type":"application/json","anthropic-dangerous-direct-browser-access":"true"};
   if(_anthropicKey){headers["x-api-key"]=_anthropicKey;headers["anthropic-version"]="2023-06-01";}
   const body={model:"claude-sonnet-4-20250514",max_tokens:1200,messages:[{role:"user",content:prompt}]};
   if(search)body.tools=[{type:"web_search_20250305",name:"web_search"}];
@@ -235,10 +286,7 @@ function Login({onLogin}){
           <button onClick={submit} disabled={loading} className="w-full py-3 rounded-xl bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 flex items-center justify-center gap-2 disabled:opacity-60">{loading?<><Loader2 size={15} className="animate-spin"/>Signing in...</>:"Sign in"}</button>
           <p className="text-xs text-slate-400 text-center mt-4">Usernames starting with <code className="bg-slate-100 px-1 rounded">evadmin</code> get admin access</p>
         </div>
-        <div className="bg-slate-100 rounded-xl p-3 mt-3 text-center">
-          <p className="text-xs text-slate-600 font-medium mb-1">Default credentials</p>
-          <p className="text-xs text-slate-500">Username: <code className="bg-white px-1.5 py-0.5 rounded font-mono">evadmin</code> &nbsp; Password: <code className="bg-white px-1.5 py-0.5 rounded font-mono">evolve2024</code></p>
-        </div>
+
       </div>
     </div>
   );
@@ -727,14 +775,27 @@ function Saved({leads,onSave,onEnrich,onOutreach,cu}){
 function Enrich({company,idx,onBack,onOutreach,onSave,isSaved,cu,settings}){
   const [loading,setLoading]=useState(false);const [data,setData]=useState(null);const [err,setErr]=useState("");const [cached,setCached]=useState(false);
   const apolloKey=settings?.apolloKey||"";
-  useEffect(()=>{sg(`enr_${company.name.toLowerCase().replace(/\s+/g,"_")}`).then(d=>{if(d){setData(d);setCached(true);}});},[company.name]);
+  const sbUrl=settings?.supabaseUrl;const sbKey=settings?.supabaseKey;
+  const slug=company.name.toLowerCase().replace(/\s+/g,"_");
+  useEffect(()=>{
+    // Try Supabase first (source of truth), fallback to localStorage
+    if(sbUrl&&sbKey){
+      sbReq(`${sbUrl}/rest/v1/enrichments?slug=eq.enr_${slug}&select=data`,sbKey)
+        .then(rows=>{
+          if(rows?.[0]?.data){setData(rows[0].data);setCached(true);await ss(`enr_${slug}`,rows[0].data);}
+          else sg(`enr_${slug}`).then(d=>{if(d){setData(d);setCached(true);}});
+        }).catch(()=>sg(`enr_${slug}`).then(d=>{if(d){setData(d);setCached(true);}}));
+    } else {
+      sg(`enr_${slug}`).then(d=>{if(d){setData(d);setCached(true);}});
+    }
+  },[company.name]);
   async function enrich(){
     setLoading(true);setErr("");setData(null);setCached(false);
     const prompt=`Business intelligence for Evolve ESolutions. Research ${company.name} (${company.website||company.industry}, ${company.location}).
 CRITICAL: Find and CLASSIFY contacts. Email: "Work" (company domain) or "Personal" (gmail etc.). Phone: "Direct", "Mobile", "Office", or "HQ".
 Return ONLY valid JSON:
 {"description":"2-sentence overview","founded":"year","headcount":"estimate","revenue":"estimate or Private","funding":"round or Bootstrapped","recentNews":["3 items with dates"],"techStack":["3-5 tech"],"hiringRoles":["3-4 areas"],"keyContacts":[{"name":"","title":"","email":"","emailType":"Work or Personal","phone":"","phoneType":"Direct or Mobile or Office or HQ or Not found","linkedin":""},{"name":"","title":"","email":"","emailType":"","phone":"","phoneType":"","linkedin":""}],"painPoints":["2-3 points"],"approachAngle":"one specific angle for Evolve ESolutions"}`;
-    try{const t=await ai(prompt,true);const m=t.match(/\{[\s\S]*\}/);if(m){const d=JSON.parse(m[0]);setData(d);await ss(`enr_${company.name.toLowerCase().replace(/\s+/g,"_")}`,d);}else setErr("Parse failed. Try again.");}catch{setErr("Enrichment failed.");}setLoading(false);
+    try{const t=await ai(prompt,true);const m=t.match(/\{[\s\S]*\}/);if(m){const d=JSON.parse(m[0]);setData(d);await ss(`enr_${slug}`,d);if(sbUrl&&sbKey)sbUpsert(sbUrl,sbKey,"enrichments",{slug:`enr_${slug}`,company:company.name,data:d},"slug");}else setErr("Parse failed. Try again.");}catch{setErr("Enrichment failed.");}setLoading(false);
   }
   async function enrichWithApollo(){
     if(!apolloKey){setErr("Add Apollo API key in Settings first.");return;}
@@ -771,7 +832,8 @@ Return ONLY valid JSON:
         source:"apollo",
       };
       setData(parsed);
-      await ss(`enr_${company.name.toLowerCase().replace(/\s+/g,"_")}`,parsed);
+      await ss(`enr_${slug}`,parsed);
+      if(sbUrl&&sbKey)sbSaveEnrichment(sbUrl,sbKey,slug,company.name,parsed);
     }catch(e){setErr(`Apollo enrichment failed: ${e.message}`);}
     setLoading(false);
   }
@@ -976,13 +1038,23 @@ export default function App(){
       const loadedSettings=s||{};
       setSettings(loadedSettings);
       if(loadedSettings.anthropicKey) _anthropicKey=loadedSettings.anthropicKey;
-      setUsers(u||[DEFAULT_ADMIN]);
-      setLeads(l||[]);
-      // Load niches & industries from Supabase if connected
+      // Load from Supabase if connected, fallback to localStorage
       if(loadedSettings.supabaseUrl&&loadedSettings.supabaseKey){
-        const config=await loadConfigFromSB(loadedSettings.supabaseUrl,loadedSettings.supabaseKey);
+        const [sbLeadRows,config]=await Promise.all([
+          sbGetAll(loadedSettings.supabaseUrl,loadedSettings.supabaseKey,"leads"),
+          loadConfigFromSB(loadedSettings.supabaseUrl,loadedSettings.supabaseKey),
+        ]);
+        // Leads: stored in data column
+        if(sbLeadRows.length) setLeads(sbLeadRows.map(r=>r.data||r));
+        else setLeads(l||[]);
+        // Users: stored in config table
+        if(config?.users?.length) setUsers(config.users);
+        else setUsers(u||[DEFAULT_ADMIN]);
         if(config?.niches?.length)setDynNiches(config.niches);
         if(config?.industries?.length)setDynIndustries(config.industries);
+      } else {
+        setLeads(l||[]);
+        setUsers(u||[DEFAULT_ADMIN]);
       }
       setReady(true);
     });
@@ -1005,19 +1077,34 @@ export default function App(){
     await ss("evolve_industries_v4",industries);
     if(settings.supabaseUrl&&settings.supabaseKey) await saveConfigToSB(settings.supabaseUrl,settings.supabaseKey,"industries",industries);
   }
-  async function addUser(u){const n=[...users,u];setUsers(n);await ss(S_USERS,n);}
-  async function removeUser(id){const n=users.filter(u=>u.id!==id);setUsers(n);await ss(S_USERS,n);}
-  async function pwReset(id,pw){const n=users.map(u=>u.id===id?{...u,password:pw}:u);setUsers(n);await ss(S_USERS,n);}
-  async function toggleSave(company){
-    setLeads(prev=>{
-      const exists=prev.some(l=>l.name===company.name);
-      let next;
-      if(exists){next=prev.filter(l=>l.name!==company.name);}
-      else{const lead={...company,ownerId:cu.username,ownerName:cu.displayName,activityLog:[]};next=[...prev,addLog(lead,"saved",cu)];}
-      ss(S_LEADS,next);return next;
-    });
+  async function addUser(u){
+    const n=[...users,u];setUsers(n);await ss(S_USERS,n);
+    if(settings.supabaseUrl&&settings.supabaseKey) saveConfigToSB(settings.supabaseUrl,settings.supabaseKey,"users",n);
   }
-  function logAct(company,action){setLeads(prev=>{const n=prev.map(l=>l.name===company.name?addLog(l,action,cu):l);ss(S_LEADS,n);return n;});}
+  async function removeUser(id){
+    const n=users.filter(u=>u.id!==id);setUsers(n);await ss(S_USERS,n);
+    if(settings.supabaseUrl&&settings.supabaseKey) saveConfigToSB(settings.supabaseUrl,settings.supabaseKey,"users",n);
+  }
+  async function pwReset(id,pw){
+    const n=users.map(u=>u.id===id?{...u,password:pw}:u);setUsers(n);await ss(S_USERS,n);
+    if(settings.supabaseUrl&&settings.supabaseKey) saveConfigToSB(settings.supabaseUrl,settings.supabaseKey,"users",n);
+  }
+  async function toggleSave(company){
+    const exists=leads.some(l=>l.name===company.name);
+    let next;
+    if(exists){
+      next=leads.filter(l=>l.name!==company.name);
+      if(settings.supabaseUrl&&settings.supabaseKey) sbDeleteRow(settings.supabaseUrl,settings.supabaseKey,"leads","name",company.name);
+    } else {
+      const lead={...company,ownerId:cu.username,ownerName:cu.displayName,activityLog:[]};
+      const withLog=addLog(lead,"saved",cu);
+      next=[...leads,withLog];
+      if(settings.supabaseUrl&&settings.supabaseKey) sbUpsert(settings.supabaseUrl,settings.supabaseKey,"leads",{name:withLog.name,owner_id:withLog.ownerId,owner_name:withLog.ownerName,data:withLog},"name");
+    }
+    setLeads(next);
+    ss(S_LEADS,next);
+  }
+  function logAct(company,action){setLeads(prev=>{const n=prev.map(l=>{if(l.name!==company.name)return l;const updated=addLog(l,action,cu);if(settings.supabaseUrl&&settings.supabaseKey)sbUpsert(settings.supabaseUrl,settings.supabaseKey,"leads",{name:updated.name,owner_id:updated.ownerId,owner_name:updated.ownerName,data:updated},"name");return updated;});ss(S_LEADS,n);return n;});}
   function isSaved(name){return leads.some(l=>l.name===name);}
   function goEnrich(c,i){setETarget(c);setEIdx(i||0);logAct(c,"enriched");setView("enrich");}
   function goOutreach(c){setOTarget(c);setView("outreach");}
