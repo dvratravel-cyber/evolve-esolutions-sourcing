@@ -216,7 +216,7 @@ async function instantlyCreateCampaign(apiKey,campaignName,contacts,emailSteps){
         name:"Business Hours",
         timing:{from:"09:00",to:"17:00"},
         days:{"0":false,"1":true,"2":true,"3":true,"4":true,"5":true,"6":false}, // Mon-Fri
-        timezone:"America/Los_Angeles",
+        timezone:"America/Dawson", // Pacific Time equivalent (America/Los_Angeles not in Instantly's allowed list)
       }],
     },
     sequences:[{steps}],
