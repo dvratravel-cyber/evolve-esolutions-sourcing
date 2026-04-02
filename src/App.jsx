@@ -184,45 +184,56 @@ async function apolloFindContacts(domain,apiKey){
 }
 
 // ── Instantly.ai v2 campaign push (via Vercel proxy to avoid CORS) ──
-// NOTE: Requires a v2 API key from Instantly → Settings → API Keys → Create v2 Key
+// NOTE: Requires a v2 API key — Instantly → Settings → API Keys → Create Key (scopes: campaigns:all + leads:all)
 async function instantlyProxy(apiKey,target,body,method="POST"){
   const r=await fetch("/api/instantly",{
     method:"POST",
     headers:{"Content-Type":"application/json"},
     body:JSON.stringify({target,body,apiKey,method}),
   });
-  const d=await r.json();
-  if(!r.ok)throw new Error(d.error||d.message||`Instantly error ${r.status}`);
+  const text=await r.text();
+  let d={};try{d=JSON.parse(text);}catch{}
+  if(!r.ok)throw new Error(d.error||d.message||`Instantly ${r.status}: ${text.slice(0,200)}`);
   return d;
 }
 async function instantlyCreateCampaign(apiKey,campaignName,contacts,emailSteps){
   if(!apiKey)throw new Error("No Instantly v2 API key — generate one at Instantly → Settings → API Keys");
-  // v2: Create campaign with sequences embedded
-  const sequences=[{steps:emailSteps.map((s,i)=>({
+  if(!emailSteps?.length)throw new Error("No email steps to push");
+
+  // Build sequences: delay = days interval between steps (not absolute day)
+  // emailSteps[i].day is absolute day, so interval = day[i] - day[i-1]
+  const steps=emailSteps.map((s,i)=>({
     type:"email",
-    delay:i===0?0:(s.day||1),
-    variants:[{subject:s.subject,body:s.body}]
-  }))}];
+    delay:i===0?0:Math.max(1,((emailSteps[i].day||1)-(emailSteps[i-1].day||1))),
+    variants:[{subject:s.subject||"Following up",body:s.body||""}],
+  }));
+
+  // Step 1: Create campaign with sequences embedded (v2 format)
   const camp=await instantlyProxy(apiKey,"/api/v2/campaigns",{
     name:campaignName,
-    campaign_schedule:{schedules:[{
-      name:"Business Hours",
-      timing:{from:"09:00",to:"17:00"},
-      days:{"0":false,"1":true,"2":true,"3":true,"4":true,"5":true,"6":false},
-      timezone:"America/Los_Angeles"
-    }]},
-    sequences,
+    campaign_schedule:{
+      schedules:[{
+        name:"Business Hours",
+        timing:{from:"09:00",to:"17:00"},
+        days:{},  // {} = all days in v2
+        timezone:"America/Los_Angeles",
+      }],
+    },
+    sequences:[{steps}],
   });
   const campaignId=camp.id;
-  // v2: Add leads one by one (each POST /api/v2/leads adds a lead to a campaign)
-  for(const contact of contacts.filter(c=>c.email&&c.email!=="Not found")){
+  if(!campaignId)throw new Error("Campaign created but no ID returned");
+
+  // Step 2: Add contacts as leads (v2 — one per request)
+  const validContacts=contacts.filter(c=>c.email&&c.email!=="Not found"&&c.email!==null);
+  for(const contact of validContacts){
     await instantlyProxy(apiKey,"/api/v2/leads",{
       email:contact.email,
       first_name:contact.name?.split(" ")[0]||"",
       last_name:contact.name?.split(" ").slice(1).join(" ")||"",
       company_name:contact.company||"",
       campaign_id:campaignId,
-    }).catch(()=>null); // don't fail if one lead fails
+    }).catch(e=>console.warn("Lead add failed:",e.message));
   }
   return campaignId;
 }
