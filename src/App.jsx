@@ -972,6 +972,7 @@ Return ONLY valid JSON:
 // ══ OUTREACH ══
 function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
   const [tmpl,setTmpl]=useState(SEQ_TEMPLATES[1]);const [step,setStep]=useState(null);const [eType,setEType]=useState("intro");const [content,setContent]=useState("");const [loading,setLoading]=useState(false);const [cp,setCp]=useState(false);
+  const [generatedSteps,setGeneratedSteps]=useState({}); // key: step label, value: {subject,body,day}
   const [liC,setLiC]=useState([]);const [liMsg,setLiMsg]=useState({});const [liLoad,setLiLoad]=useState({});const [liCp,setLiCp]=useState("");const [liOpen,setLiOpen]=useState(true);
   const [phC,setPhC]=useState([]);const [scripts,setScripts]=useState({});const [texts,setTexts]=useState({});const [audios,setAudios]=useState({});const [playing,setPlaying]=useState({});const [lScript,setLScript]=useState({});const [lText,setLText]=useState({});const [lVoice,setLVoice]=useState({});const [phTab,setPhTab]=useState({});const [phCp,setPhCp]=useState("");const [phOpen,setPhOpen]=useState(true);
   const [iPushing,setIPushing]=useState(false);const [iPushed,setIPushed]=useState(false);const [iErr,setIErr]=useState("");
@@ -995,13 +996,16 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
     try{
       const txt=await ai(prompts[t||"intro"]||prompts.intro);
       setContent(txt);
+      // Parse subject and body
+      const lines=txt.split("\n");
+      const subLine=lines.find(l=>l.toLowerCase().startsWith("subject:"))||"Subject: Quick follow-up";
+      const subj=subLine.replace(/^subject:\s*/i,"").trim();
+      const body=lines.slice(lines.indexOf(subLine)+2).join("\n").trim();
+      // Store in generatedSteps map so Push to Instantly can use without re-generating
+      setGeneratedSteps(prev=>({...prev,[s.label]:{subject:subj,body,day:s.day,label:s.label}}));
       onLogAct(company,"outreach generated");
       // Save to DB
       if(settings?.supabaseUrl&&settings?.supabaseKey){
-        const lines=txt.split("\n");
-        const subLine=lines.find(l=>l.toLowerCase().startsWith("subject:"))||"";
-        const subj=subLine.replace(/^subject:\s*/i,"").trim();
-        const body=lines.slice(lines.indexOf(subLine)+2).join("\n").trim();
         sbSaveOutreach(settings.supabaseUrl,settings.supabaseKey,company.name,cu.username,tmpl.id,[{day:s.day,label:s.label,subject:subj,body}]);
       }
     }catch{setContent("Error. Try again.");}
@@ -1010,22 +1014,19 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
 
   async function pushToInstantly(){
     if(!instantlyKey){setIErr("Add Instantly API key in Settings first.");return;}
+    // Use already-generated steps — no re-generation needed (avoids rate limit)
+    const emailSteps=tmpl.steps.filter(s=>s.type==="email");
+    const missing=emailSteps.filter(s=>!generatedSteps[s.label]);
+    if(missing.length>0){
+      setIErr(`Please generate all email steps first. Missing: ${missing.map(s=>s.label).join(", ")}`);
+      return;
+    }
     setIPushing(true);setIErr("");setIPushed(false);
     try{
-      // Generate all email steps
-      const steps=[];
-      for(const s of tmpl.steps){
-        if(s.type!=="email")continue;
-        const t=EMAIL_TYPES.find(e=>s.label.toLowerCase().includes(e[0]))?.[0]||"intro";
-        const txt=await ai(prompts[t]||prompts.intro);
-        const lines=txt.split("\n");
-        const subjectLine=lines.find(l=>l.toLowerCase().startsWith("subject:"))||"Subject: Quick question";
-        const subject=subjectLine.replace(/^subject:\s*/i,"").trim();
-        const body=lines.slice(lines.indexOf(subjectLine)+2).join("\n").trim();
-        steps.push({label:s.label,day:s.day,subject,body});
-      }
+      // Use pre-generated steps from state
+      const steps=emailSteps.map(s=>generatedSteps[s.label]).filter(Boolean);
       const enriched=await sg(`enr_${company.name.toLowerCase().replace(/\s+/g,"_")}`);
-      const contacts=(enriched?.keyContacts||[]).filter(c=>c.email&&c.email!=="Not found").map(c=>({...c,company:company.name}));
+      const contacts=(enriched?.keyContacts||[]).filter(c=>c.email&&c.email!=="Not found"&&c.email!==null).map(c=>({...c,company:company.name}));
       const campaignName=`Evolve — ${company.name} — ${new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`;
       const campaignId=await instantlyCreateCampaign(instantlyKey,campaignName,contacts,steps);
       onLogAct(company,"pushed to Instantly");
@@ -1057,7 +1058,10 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
           {iPushed?(
             <div className="flex items-center gap-2"><CheckCircle2 size={14} className="text-emerald-500 flex-shrink-0"/><div><p className="text-xs font-semibold text-emerald-700">Campaign draft created in Instantly</p><p className="text-xs text-emerald-600">ID: {iPushed} — go to Instantly and activate it to start sending.</p></div></div>
           ):(
-            <div><p className="text-xs font-semibold text-slate-700">Push full sequence to Instantly</p><p className="text-xs text-slate-500">Generates all email steps, creates a campaign draft — you activate it manually.</p></div>
+            <div>
+              <p className="text-xs font-semibold text-slate-700">Push full sequence to Instantly</p>
+              <p className="text-xs text-slate-500">{(()=>{const total=tmpl.steps.filter(s=>s.type==="email").length;const ready=Object.keys(generatedSteps).length;return ready>=total?`✓ All ${total} steps ready to push`:`${ready}/${total} steps generated — click each step to generate before pushing`;})()}</p>
+            </div>
           )}
           {iErr&&<div className="mt-1">
             <p className="text-xs text-red-600">{iErr}</p>
