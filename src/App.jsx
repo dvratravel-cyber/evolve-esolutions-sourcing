@@ -150,29 +150,35 @@ async function apolloFindContacts(domain,apiKey){
   return r.json();
 }
 
-// ── Instantly.ai campaign push ──
+// ── Instantly.ai campaign push (via Vercel proxy to avoid CORS) ──
+async function instantlyProxy(apiKey,target,body){
+  const r=await fetch("/api/instantly",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({target,body,apiKey}),
+  });
+  const d=await r.json();
+  if(!r.ok)throw new Error(d.error||`Instantly error ${r.status}`);
+  return d;
+}
 async function instantlyCreateCampaign(apiKey,campaignName,contacts,emailSteps){
   if(!apiKey)throw new Error("No Instantly API key");
   // 1. Create campaign
-  const camp=await fetch("https://api.instantly.ai/api/v1/campaign/create",{
-    method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${apiKey}`},
-    body:JSON.stringify({name:campaignName,schedule_name:"Business Hours",timezone:"America/Los_Angeles"}),
+  const {id:campaignId}=await instantlyProxy(apiKey,"/api/v1/campaign/create",{
+    name:campaignName,schedule_name:"Business Hours",timezone:"America/Los_Angeles"
   });
-  if(!camp.ok)throw new Error(`Instantly campaign error ${camp.status}`);
-  const {id:campaignId}=await camp.json();
   // 2. Add lead contacts
   if(contacts?.length){
-    await fetch("https://api.instantly.ai/api/v1/lead/add",{
-      method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${apiKey}`},
-      body:JSON.stringify({campaign_id:campaignId,leads:contacts.map(c=>({email:c.email||"",first_name:c.name?.split(" ")[0]||"",last_name:c.name?.split(" ").slice(1).join(" ")||"",company_name:c.company||""})).filter(c=>c.email)}),
+    await instantlyProxy(apiKey,"/api/v1/lead/add",{
+      campaign_id:campaignId,
+      leads:contacts.map(c=>({email:c.email||"",first_name:c.name?.split(" ")[0]||"",last_name:c.name?.split(" ").slice(1).join(" ")||"",company_name:c.company||""})).filter(c=>c.email)
     });
   }
   // 3. Add email sequence steps
   for(const step of emailSteps){
     if(!step.subject||!step.body)continue;
-    await fetch("https://api.instantly.ai/api/v1/campaign/subsequence/create",{
-      method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${apiKey}`},
-      body:JSON.stringify({campaign_id:campaignId,subject:step.subject,body:step.body,delay_days:step.day||1}),
+    await instantlyProxy(apiKey,"/api/v1/campaign/subsequence/create",{
+      campaign_id:campaignId,subject:step.subject,body:step.body,delay_days:step.day||1
     });
   }
   return campaignId;
