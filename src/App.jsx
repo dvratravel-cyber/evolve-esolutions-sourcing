@@ -215,7 +215,7 @@ async function instantlyCreateCampaign(apiKey,campaignName,contacts,emailSteps){
       schedules:[{
         name:"Business Hours",
         timing:{from:"09:00",to:"17:00"},
-        days:{},  // {} = all days in v2
+        days:{"0":false,"1":true,"2":true,"3":true,"4":true,"5":true,"6":false}, // Mon-Fri
         timezone:"America/Los_Angeles",
       }],
     },
@@ -991,7 +991,11 @@ Return ONLY valid JSON:
 // ══ OUTREACH ══
 function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
   const [tmpl,setTmpl]=useState(SEQ_TEMPLATES[1]);const [step,setStep]=useState(null);const [eType,setEType]=useState("intro");const [content,setContent]=useState("");const [loading,setLoading]=useState(false);const [cp,setCp]=useState(false);
-  const [generatedSteps,setGeneratedSteps]=useState({}); // key: step label, value: {subject,body,day}
+  const outreachCacheKey=`outreach_${company.name.replace(/\s+/g,"_")}_${tmpl?.id||"default"}`;
+  const [generatedSteps,setGeneratedSteps]=useState(()=>{
+    // Load cached steps from localStorage on init
+    try{const raw=localStorage.getItem(outreachCacheKey);return raw?JSON.parse(raw):{};}catch{return {};}
+  });
   const [liC,setLiC]=useState([]);const [liMsg,setLiMsg]=useState({});const [liLoad,setLiLoad]=useState({});const [liCp,setLiCp]=useState("");const [liOpen,setLiOpen]=useState(true);
   const [phC,setPhC]=useState([]);const [scripts,setScripts]=useState({});const [texts,setTexts]=useState({});const [audios,setAudios]=useState({});const [playing,setPlaying]=useState({});const [lScript,setLScript]=useState({});const [lText,setLText]=useState({});const [lVoice,setLVoice]=useState({});const [phTab,setPhTab]=useState({});const [phCp,setPhCp]=useState("");const [phOpen,setPhOpen]=useState(true);
   const [iPushing,setIPushing]=useState(false);const [iPushed,setIPushed]=useState(false);const [iErr,setIErr]=useState("");
@@ -1022,7 +1026,11 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
       const bodyLines=lines.slice(lines.indexOf(subLine)+2);
       const body=bodyLines.join("\n").trim();
       // Store in generatedSteps map so Push to Instantly can use without re-generating
-      setGeneratedSteps(prev=>({...prev,[s.label]:{subject:subj,body,day:s.day,label:s.label}}));
+      setGeneratedSteps(prev=>{
+        const next={...prev,[s.label]:{subject:subj,body,day:s.day,label:s.label}};
+        try{localStorage.setItem(outreachCacheKey,JSON.stringify(next));}catch{}
+        return next;
+      });
       onLogAct(company,"outreach generated");
       // Save to DB
       if(settings?.supabaseUrl&&settings?.supabaseKey){
@@ -1104,9 +1112,20 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
           <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-4"><div className="text-xs font-semibold text-indigo-400 uppercase tracking-wide mb-3 flex items-center gap-1.5"><Sparkles size={12}/>Pitch pillars</div><ul className="space-y-2">{[["⚡","24–48hr delivery"],["🎯","Passive talent access"],["🔄","Contract, perm & retained"],["✅","No placement, no fee"],["🚀","1–3 day onboarding"]].map(([icon,text])=><li key={text} className="flex items-center gap-2 text-xs text-indigo-800"><span>{icon}</span><span>{text}</span></li>)}</ul></div>
           <div className="bg-white rounded-2xl border border-slate-200 p-4">
             <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Email sequence</h3>
-            <div className="flex gap-1.5 mb-3">{SEQ_TEMPLATES.map(t=><button key={t.id} onClick={()=>setTmpl(t)} className={`flex-1 py-2 rounded-xl border text-xs font-medium transition-all ${tmpl.id===t.id?"bg-slate-800 text-white border-slate-800":"border-slate-200 text-slate-600 hover:border-slate-400"}`}>{t.label}</button>)}</div>
+            <div className="flex gap-1.5 mb-3">{SEQ_TEMPLATES.map(t=><button key={t.id} onClick={()=>{setTmpl(t);setGeneratedSteps({});setStep(null);setContent("");}} className={`flex-1 py-2 rounded-xl border text-xs font-medium transition-all ${tmpl.id===t.id?"bg-slate-800 text-white border-slate-800":"border-slate-200 text-slate-600 hover:border-slate-400"}`}>{t.label}</button>)}</div>
             <div className="relative"><div className="absolute left-3.5 top-3 bottom-3 w-px bg-slate-100"/>
-              <div className="space-y-2">{tmpl.steps.map((s,i)=><div key={i} className={`relative flex items-center gap-3 p-2.5 rounded-xl cursor-pointer border transition-all ${step?.label===s.label&&step?.day===s.day?"border-emerald-200 bg-emerald-50":"border-transparent hover:border-slate-200 hover:bg-slate-50"}`} onClick={()=>gen(s,EMAIL_TYPES.find(e=>s.label.toLowerCase().includes(e[0]))?.[0]||"intro")}><div className="w-7 h-7 rounded-full bg-white border-2 border-slate-200 flex items-center justify-center z-10 flex-shrink-0"><span className="text-xs font-semibold text-slate-500">{i+1}</span></div><div className="flex-1 min-w-0"><div className="text-xs font-medium text-slate-800">{s.label}</div><div className="text-xs text-slate-400">Day {s.day}</div></div><span className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-md font-medium ${s.type==="call"?"bg-amber-100 text-amber-700":"bg-slate-100 text-slate-600"}`}>{s.type==="call"?<Phone size={12}/>:<Mail size={12}/>}{s.type}</span></div>)}</div>
+              <div className="space-y-2">{tmpl.steps.map((s,i)=><div key={i} className={`relative flex items-center gap-3 p-2.5 rounded-xl cursor-pointer border transition-all ${step?.label===s.label&&step?.day===s.day?"border-emerald-200 bg-emerald-50":"border-transparent hover:border-slate-200 hover:bg-slate-50"}`} onClick={()=>{
+                  const eTypeForStep=EMAIL_TYPES.find(e=>s.label.toLowerCase().includes(e[0]))?.[0]||"intro";
+                  if(generatedSteps[s.label]){
+                    // Already generated — show cached, no API call
+                    setStep(s);setEType(eTypeForStep);
+                    const gs=generatedSteps[s.label];
+                    setContent(`Subject: ${gs.subject}\n\n${gs.body}`);
+                  } else {
+                    gen(s,eTypeForStep);
+                  }
+                }}><div className="w-7 h-7 rounded-full bg-white border-2 border-slate-200 flex items-center justify-center z-10 flex-shrink-0"><span className="text-xs font-semibold text-slate-500">{i+1}</span></div><div className="flex-1 min-w-0"><div className="text-xs font-medium text-slate-800">{s.label}</div><div className="text-xs text-slate-400">Day {s.day}</div></div><span className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-md font-medium ${s.type==="call"?"bg-amber-100 text-amber-700":"bg-slate-100 text-slate-600"}`}>{s.type==="call"?<Phone size={12}/>:<Mail size={12}/>}{s.type}</span>
+                  {generatedSteps[s.label]&&<span className="text-xs text-emerald-600 font-semibold">✓</span>}</div>)}</div>
             </div>
           </div>
         </div>
