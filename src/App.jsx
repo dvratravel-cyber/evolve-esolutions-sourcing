@@ -5,7 +5,7 @@ import {
   TrendingUp, Users, Globe, Zap, CheckCircle2, BarChart2,
   Target, Trash2, FileText, Settings, Download, Play, Square,
   Key, Database, Mic, LogOut, UserPlus, Shield, User, Eye,
-  EyeOff, Clock, Activity, ChevronDown, ChevronRight, Tag
+  EyeOff, Clock, Activity, ChevronDown, ChevronRight, Tag, X
 } from "lucide-react";
 
 const ANTHROPIC_API   = "https://api.anthropic.com/v1/messages";
@@ -177,7 +177,7 @@ async function apolloFindContacts(domain,apiKey){
   // Step 1: Search — q_organization_domains MUST be a string (not array) for api_search
   const searchRes=await apolloProxy(apiKey,"/api/v1/mixed_people/api_search",{
     q_organization_domains:domain,
-    person_titles:["HR Director","Head of Talent","VP of Engineering","CTO","CIO","People Operations","Talent Acquisition","Technical Recruiter","Hiring Manager","Head of HR","Chief People Officer","VP HR","Director of Engineering","Head of People","Director of HR"],
+    person_titles:["CEO","Chief Executive Officer","CFO","Chief Financial Officer","COO","Chief Operating Officer","President","Founder","Co-Founder","Managing Director","General Manager","VP Operations","VP Finance","Owner","Director of Operations","Head of Operations"],
     per_page:5,
     page:1,
   });
@@ -921,6 +921,40 @@ function Saved({leads,onSave,onEnrich,onOutreach,cu}){
 // ══ ENRICH ══
 function Enrich({company,idx,onBack,onOutreach,onSave,isSaved,cu,settings}){
   const [loading,setLoading]=useState(false);const [data,setData]=useState(null);const [err,setErr]=useState("");const [cached,setCached]=useState(false);
+  const MAX_CONTACTS=5;
+  const [showAddContact,setShowAddContact]=useState(false);
+  const [newContact,setNewContact]=useState({name:"",title:"",email:"",phone:""});
+  const [addContactErr,setAddContactErr]=useState("");
+
+  function addContactManually(){
+    if(!newContact.name.trim()){setAddContactErr("Name is required.");return;}
+    const current=data?.keyContacts||[];
+    if(current.length>=MAX_CONTACTS){setAddContactErr(`Max ${MAX_CONTACTS} contacts per lead.`);return;}
+    const contact={
+      name:newContact.name.trim(),
+      title:newContact.title.trim(),
+      email:newContact.email.trim()||null,
+      emailType:newContact.email.trim()?"Work":null,
+      phone:newContact.phone.trim()||null,
+      phoneType:newContact.phone.trim()?"Direct":null,
+      linkedin:null,
+      source:"Manual",
+    };
+    const updated={...(data||{}),keyContacts:[...current,contact]};
+    setData(updated);
+    ss(`enr_${slug}`,updated);
+    if(sbUrl&&sbKey){sbSaveEnrichment(sbUrl,sbKey,slug,company.name,updated);sbSaveContacts(sbUrl,sbKey,company.name,updated.keyContacts);}
+    setNewContact({name:"",title:"",email:"",phone:""});
+    setAddContactErr("");
+    setShowAddContact(false);
+  }
+
+  function removeContact(idx){
+    const updated={...data,keyContacts:data.keyContacts.filter((_,i)=>i!==idx)};
+    setData(updated);
+    ss(`enr_${slug}`,updated);
+    if(sbUrl&&sbKey){sbSaveEnrichment(sbUrl,sbKey,slug,company.name,updated);sbSaveContacts(sbUrl,sbKey,company.name,updated.keyContacts);}
+  }
   const apolloKey=settings?.apolloKey||"";
   const sbUrl=settings?.supabaseUrl;const sbKey=settings?.supabaseKey;
   const slug=company.name.toLowerCase().replace(/\s+/g,"_");
@@ -980,8 +1014,10 @@ Return ONLY valid JSON:
         linkedin:p.linkedin_url||"",
         source:"Apollo",
       }));
-      // Merge: keep all AI company data, overlay Apollo contacts
-      const merged={...(data||{}),keyContacts:apolloContacts,enrichmentSource:"Apollo (contacts)"};
+      // Merge: keep existing contacts + add Apollo ones, cap at 5
+      const existing=(data?.keyContacts||[]).filter(x=>x.source!=="Apollo");
+      const combined=[...existing,...apolloContacts].slice(0,5);
+      const merged={...(data||{}),keyContacts:combined,enrichmentSource:"Apollo (contacts)"};
       setData(merged);
       await ss(`enr_${slug}`,merged);
       if(sbUrl&&sbKey){
@@ -1033,7 +1069,41 @@ Return ONLY valid JSON:
         </div>
       </div>
         <div className="bg-white rounded-2xl border border-slate-200 p-5"><h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Overview</h3><p className="text-sm text-slate-700 leading-relaxed mb-4">{data.description}</p><div className="grid grid-cols-4 gap-3">{[["Founded",data.founded],["Headcount",data.headcount],["Revenue",data.revenue],["Funding",data.funding]].map(([l,v])=><div key={l} className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400 mb-1">{l}</div><div className="text-sm font-semibold text-slate-800">{v||"—"}</div></div>)}</div></div>
-        <div className="bg-white rounded-2xl border border-slate-200 p-5"><div className="flex items-center justify-between mb-3"><h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide flex items-center gap-1.5"><Users size={13}/>Key contacts — classified</h3><div className="flex gap-1.5">{["Work","Personal","Direct","Mobile"].map(l=><CtBadge key={l} label={l}/>)}</div></div><div className="grid grid-cols-2 gap-3">{(data.keyContacts||[]).map((c,i)=><CC key={i} c={c} i={i}/>)}</div></div>
+        <div className="bg-white rounded-2xl border border-slate-200 p-5">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide flex items-center gap-1.5"><Users size={13}/>Key contacts</h3>
+              <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${(data.keyContacts||[]).length>=MAX_CONTACTS?"bg-amber-100 text-amber-700":"bg-slate-100 text-slate-500"}`}>{(data.keyContacts||[]).length}/{MAX_CONTACTS}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              {(data.keyContacts||[]).length<MAX_CONTACTS&&<button onClick={()=>{setShowAddContact(p=>!p);setAddContactErr("");}} className="flex items-center gap-1 text-xs text-slate-600 px-2 py-1 rounded-lg border border-slate-200 hover:border-slate-400"><UserPlus size={11}/>{showAddContact?"Cancel":"Add contact"}</button>}
+              <div className="flex gap-1">{["Work","Personal","Direct","Mobile"].map(l=><CtBadge key={l} label={l}/>)}</div>
+            </div>
+          </div>
+
+          {/* Manual add contact form */}
+          {showAddContact&&<div className="mb-4 p-3 bg-slate-50 rounded-xl border border-slate-200">
+            <p className="text-xs font-semibold text-slate-600 mb-3 flex items-center gap-1.5"><UserPlus size={11}/>Add contact manually</p>
+            <div className="grid grid-cols-2 gap-2 mb-2">
+              <div><label className="block text-xs text-slate-500 mb-1">Name *</label><input value={newContact.name} onChange={e=>setNewContact(p=>({...p,name:e.target.value}))} placeholder="Jane Smith" className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 focus:outline-none focus:border-slate-400"/></div>
+              <div><label className="block text-xs text-slate-500 mb-1">Title</label><input value={newContact.title} onChange={e=>setNewContact(p=>({...p,title:e.target.value}))} placeholder="CEO" className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 focus:outline-none focus:border-slate-400"/></div>
+              <div><label className="block text-xs text-slate-500 mb-1">Email</label><input value={newContact.email} onChange={e=>setNewContact(p=>({...p,email:e.target.value}))} placeholder="jane@company.com" className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 focus:outline-none focus:border-slate-400"/></div>
+              <div><label className="block text-xs text-slate-500 mb-1">Phone</label><input value={newContact.phone} onChange={e=>setNewContact(p=>({...p,phone:e.target.value}))} placeholder="+1 925 xxx xxxx" className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 focus:outline-none focus:border-slate-400"/></div>
+            </div>
+            {addContactErr&&<p className="text-xs text-red-500 mb-2">{addContactErr}</p>}
+            <button onClick={addContactManually} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 text-white text-xs rounded-lg hover:bg-slate-700"><UserPlus size={11}/>Add contact</button>
+          </div>}
+
+          <div className="grid grid-cols-2 gap-3">
+            {(data.keyContacts||[]).map((ct,i)=>(
+              <div key={i} className="relative group">
+                <CC c={ct} i={i}/>
+                <button onClick={()=>removeContact(i)} className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity w-5 h-5 flex items-center justify-center rounded bg-red-50 border border-red-200 text-red-400 hover:text-red-600" title="Remove contact"><X size={10}/></button>
+              </div>
+            ))}
+          </div>
+          {(data.keyContacts||[]).length===0&&<p className="text-xs text-slate-400 text-center py-4">No contacts yet — run enrichment or add manually above.</p>}
+        </div>
         <div className="grid grid-cols-2 gap-4">
           <div className="bg-white rounded-2xl border border-slate-200 p-5"><h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3 flex items-center gap-1.5"><BarChart2 size={13}/>Recent news</h3><ul className="space-y-2">{(data.recentNews||[]).map((n,i)=><li key={i} className="flex items-start gap-2 text-sm text-slate-700"><span className="w-4 h-4 rounded-full bg-violet-100 text-violet-700 text-xs flex items-center justify-center flex-shrink-0 mt-0.5">{i+1}</span>{n}</li>)}</ul></div>
           <div className="bg-white rounded-2xl border border-slate-200 p-5"><h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3 flex items-center gap-1.5"><Users size={13}/>Hiring areas</h3><div className="flex flex-wrap gap-2 mb-4">{(data.hiringRoles||[]).map((r,i)=><Pill key={i} label={r} color="bg-emerald-50 text-emerald-700"/>)}</div><h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2 flex items-center gap-1.5"><Globe size={13}/>Tech stack</h3><div className="flex flex-wrap gap-2">{(data.techStack||[]).map((t,i)=><Pill key={i} label={t} color="bg-slate-100 text-slate-600"/>)}</div></div>
