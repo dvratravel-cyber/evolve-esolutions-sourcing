@@ -174,23 +174,39 @@ async function apolloEnrichCompany(domain,apiKey){
 }
 async function apolloFindContacts(domain,apiKey){
   if(!apiKey)throw new Error("No Apollo API key");
-  // Step 1: Search for people at domain (new api_search endpoint — returns ID/name/title/LinkedIn, no email)
+  // Step 1: Search — q_organization_domains MUST be a string (not array) for api_search
   const searchRes=await apolloProxy(apiKey,"/api/v1/mixed_people/api_search",{
-    q_organization_domains:[domain],
+    q_organization_domains:domain,
     person_titles:["HR Director","Head of Talent","VP of Engineering","CTO","CIO","People Operations","Talent Acquisition","Technical Recruiter","Hiring Manager","Head of HR","Chief People Officer","VP HR","Director of Engineering","Head of People","Director of HR"],
     per_page:5,
     page:1,
   });
   const found=(searchRes?.people||[]).slice(0,3);
   if(!found.length)return {people:[]};
-  // Step 2: Enrich each person individually to get their verified work email
+  // Step 2: Enrich each person with people/match to get full name + email
+  // (api_search returns obfuscated last name and no email)
   const enriched=await Promise.all(found.map(async p=>{
     try{
       const res=await apolloProxy(apiKey,`/api/v1/people/match?id=${p.id}`);
       const ep=res?.person||{};
-      return {...p,email:ep.email||null,phone:ep.phone_numbers?.[0]?.raw_number||null};
+      const fullName=`${ep.first_name||p.first_name||""} ${ep.last_name||""}`.trim()||p.first_name||"Unknown";
+      return {
+        name:fullName,
+        title:ep.title||p.title||"",
+        email:ep.email||null,
+        emailType:ep.email?.includes(domain)?"Work":"Personal",
+        phone:ep.phone_numbers?.[0]?.raw_number||null,
+        phoneType:ep.phone_numbers?.[0]?.type||null,
+        linkedin:ep.linkedin_url||null,
+        source:"Apollo",
+      };
     }catch{
-      return {...p,email:null,phone:null};
+      // Fallback: use what we got from search (obfuscated name)
+      return {
+        name:p.first_name||"Unknown",
+        title:p.title||"",
+        email:null,phone:null,phoneType:null,linkedin:null,source:"Apollo",
+      };
     }
   }));
   return {people:enriched};
@@ -837,7 +853,8 @@ Rules:
                       <Score s={c.fitScore}/>
                       {c.searchMode==="niche"&&<span className="text-xs bg-indigo-50 text-indigo-600 border border-indigo-100 px-2 py-0.5 rounded-full font-medium">{selectedNiche?.label||"Niche"}</span>}
                     </div>
-                    <div className="text-xs text-slate-500 mb-2">{c.industry} · {c.size} · {c.location}</div>
+                    <div className="text-xs text-slate-500 mb-1">{c.industry} · {c.size} · {c.location}</div>
+                    {c.website&&<a href={`https://${c.website}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline mb-2"><Globe size={11}/>{c.website}</a>}
                     <div className="bg-amber-50 border border-amber-100 rounded-lg px-3 py-2 mb-2"><span className="text-xs font-medium text-amber-700">Signal: </span><span className="text-xs text-amber-800">{c.signal}</span></div>
                     <p className="text-xs text-slate-500 mb-3">{c.fitReason}</p>
                     <div className="flex items-center gap-2 flex-wrap">
@@ -880,7 +897,10 @@ function Saved({leads,onSave,onEnrich,onOutreach,cu}){
                 <Av name={c.name} idx={i}/>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap"><span className="font-semibold text-slate-800 text-sm">{c.name}</span><Score s={c.fitScore}/>{isAdmin&&c.ownerName&&<span className="flex items-center gap-1 text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full"><User size={10}/>{c.ownerName}</span>}</div>
-                  <div className="text-xs text-slate-500">{c.industry} · {c.location}</div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs text-slate-500">{c.industry} · {c.location}</span>
+                    {c.website&&<a href={`https://${c.website}`} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()} className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"><Globe size={10}/>{c.website}</a>}
+                  </div>
                   <div className="text-xs text-slate-400 mt-0.5 truncate">{c.signal}</div>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
@@ -1115,7 +1135,10 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
   return(
     <div className="max-w-4xl mx-auto px-6 py-8">
       <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-700 mb-5"><ArrowLeft size={14}/>Back</button>
-      <div className="flex items-start gap-3 mb-5"><Av name={company.name} idx={0} lg/><div className="flex-1"><h1 className="text-xl font-semibold text-slate-800">{company.name}</h1><p className="text-sm text-slate-500">{company.industry} · {company.location}</p></div><button onClick={()=>onSave(company)} className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium border transition-all ${isSaved?"bg-slate-800 text-white border-slate-800":"border-slate-200 text-slate-700 hover:border-slate-400"}`}>{isSaved?<><BookmarkCheck size={14}/>Saved</>:<><Bookmark size={14}/>Save</>}</button></div>
+      <div className="flex items-start gap-3 mb-5"><Av name={company.name} idx={0} lg/><div className="flex-1"><h1 className="text-xl font-semibold text-slate-800">{company.name}</h1>
+          <p className="text-sm text-slate-500">{company.industry} · {company.location}</p>
+          {company.website&&<a href={`https://${company.website}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"><Globe size={11}/>{company.website}</a>}
+          </div><button onClick={()=>onSave(company)} className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium border transition-all ${isSaved?"bg-slate-800 text-white border-slate-800":"border-slate-200 text-slate-700 hover:border-slate-400"}`}>{isSaved?<><BookmarkCheck size={14}/>Saved</>:<><Bookmark size={14}/>Save</>}</button></div>
 
       <InstantlyTags user={cu}/>
 
