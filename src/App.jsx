@@ -130,6 +130,33 @@ async function sbSaveEnrichment(url,key,slug,company,data){
   await sbReq(`${url}/rest/v1/enrichments`,key,"POST",{slug,company,data},true);
 }
 
+// ── Supabase contacts (verified only) ──
+async function sbSaveContacts(url,key,leadName,contacts){
+  if(!url||!key||!contacts?.length)return;
+  // Delete old contacts for this lead first
+  await sbReq(`${url}/rest/v1/contacts?lead_name=eq.${encodeURIComponent(leadName)}`,key,"DELETE");
+  // Insert only contacts with at least a name
+  const verified=contacts.filter(c=>c.name&&c.name!=="Unknown").map(c=>({
+    lead_name:leadName,
+    name:c.name||null,
+    title:c.title||null,
+    email:c.email&&c.email!=="Not found"?c.email:null, // null if not found/verified
+    email_type:c.emailType||null,
+    phone:c.phone&&c.phone!=="Not found"?c.phone:null, // null if not found
+    phone_type:c.phoneType&&c.phoneType!=="Not found"?c.phoneType:null,
+    linkedin:c.linkedin||null,
+    source:c.source||"AI",
+  }));
+  if(verified.length) await sbReq(`${url}/rest/v1/contacts`,key,"POST",verified);
+}
+
+// ── Supabase outreach ──
+async function sbSaveOutreach(url,key,leadName,ownerId,sequenceType,steps,campaignId=null){
+  if(!url||!key)return;
+  const record={lead_name:leadName,owner_id:ownerId,sequence_type:sequenceType,steps,instantly_campaign_id:campaignId||null};
+  await sbReq(`${url}/rest/v1/outreach`,key,"POST",record,true);
+}
+
 // ── Apollo.io enrichment ──
 async function apolloEnrichCompany(domain,apiKey){
   if(!apiKey)throw new Error("No Apollo API key");
@@ -141,45 +168,61 @@ async function apolloEnrichCompany(domain,apiKey){
 }
 async function apolloFindContacts(domain,apiKey){
   if(!apiKey)throw new Error("No Apollo API key");
+  // Try multiple title combinations for best coverage
   const r=await fetch("https://api.apollo.io/api/v1/mixed_people/search",{
     method:"POST",
     headers:{"Content-Type":"application/json","X-Api-Key":apiKey},
-    body:JSON.stringify({q_organization_domains:domain,person_titles:["HR Director","Head of Talent","VP Engineering","CTO","Hiring Manager","People Operations"],per_page:3}),
+    body:JSON.stringify({
+      q_organization_domains:[domain],
+      person_titles:["HR Director","Head of Talent","VP Engineering","CTO","CIO","People Operations","Talent Acquisition","Technical Recruiter","Hiring Manager","Head of HR","Chief People Officer"],
+      per_page:5,
+      page:1,
+    }),
   });
-  if(!r.ok)throw new Error(`Apollo error ${r.status}`);
+  if(!r.ok)throw new Error(`Apollo error ${r.status}: ${await r.text()}`);
   return r.json();
 }
 
-// ── Instantly.ai campaign push (via Vercel proxy to avoid CORS) ──
-async function instantlyProxy(apiKey,target,body){
+// ── Instantly.ai v2 campaign push (via Vercel proxy to avoid CORS) ──
+// NOTE: Requires a v2 API key from Instantly → Settings → API Keys → Create v2 Key
+async function instantlyProxy(apiKey,target,body,method="POST"){
   const r=await fetch("/api/instantly",{
     method:"POST",
     headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({target,body,apiKey}),
+    body:JSON.stringify({target,body,apiKey,method}),
   });
   const d=await r.json();
-  if(!r.ok)throw new Error(d.error||`Instantly error ${r.status}`);
+  if(!r.ok)throw new Error(d.error||d.message||`Instantly error ${r.status}`);
   return d;
 }
 async function instantlyCreateCampaign(apiKey,campaignName,contacts,emailSteps){
-  if(!apiKey)throw new Error("No Instantly API key");
-  // 1. Create campaign
-  const {id:campaignId}=await instantlyProxy(apiKey,"/api/v1/campaign/create",{
-    name:campaignName,schedule_name:"Business Hours",timezone:"America/Los_Angeles"
+  if(!apiKey)throw new Error("No Instantly v2 API key — generate one at Instantly → Settings → API Keys");
+  // v2: Create campaign with sequences embedded
+  const sequences=[{steps:emailSteps.map((s,i)=>({
+    type:"email",
+    delay:i===0?0:(s.day||1),
+    variants:[{subject:s.subject,body:s.body}]
+  }))}];
+  const camp=await instantlyProxy(apiKey,"/api/v2/campaigns",{
+    name:campaignName,
+    campaign_schedule:{schedules:[{
+      name:"Business Hours",
+      timing:{from:"09:00",to:"17:00"},
+      days:{"0":false,"1":true,"2":true,"3":true,"4":true,"5":true,"6":false},
+      timezone:"America/Los_Angeles"
+    }]},
+    sequences,
   });
-  // 2. Add lead contacts
-  if(contacts?.length){
-    await instantlyProxy(apiKey,"/api/v1/lead/add",{
+  const campaignId=camp.id;
+  // v2: Add leads one by one (each POST /api/v2/leads adds a lead to a campaign)
+  for(const contact of contacts.filter(c=>c.email&&c.email!=="Not found")){
+    await instantlyProxy(apiKey,"/api/v2/leads",{
+      email:contact.email,
+      first_name:contact.name?.split(" ")[0]||"",
+      last_name:contact.name?.split(" ").slice(1).join(" ")||"",
+      company_name:contact.company||"",
       campaign_id:campaignId,
-      leads:contacts.map(c=>({email:c.email||"",first_name:c.name?.split(" ")[0]||"",last_name:c.name?.split(" ").slice(1).join(" ")||"",company_name:c.company||""})).filter(c=>c.email)
-    });
-  }
-  // 3. Add email sequence steps
-  for(const step of emailSteps){
-    if(!step.subject||!step.body)continue;
-    await instantlyProxy(apiKey,"/api/v1/campaign/subsequence/create",{
-      campaign_id:campaignId,subject:step.subject,body:step.body,delay_days:step.day||1
-    });
+    }).catch(()=>null); // don't fail if one lead fails
   }
   return campaignId;
 }
@@ -608,13 +651,17 @@ function Discover({leads,onSave,onEnrich,onOutreach,cu,niches:dynNiches,industri
     if(!canSearch)return;setLoading(true);setResults([]);setErr("");
     const sig=sigs.length?sigs.join(", "):"actively hiring or growing";
     const target=mode==="industry"?`Industry: ${industry}`:`Niche: ${selectedNiche.label}${subNiche?`, sub-niche: ${subNiche}`:""}`;
-    const prompt=`You are a B2B sales researcher for Evolve ESolutions (IT/HR/Healthcare/Legal recruitment, Pleasanton CA).
+    const sixMonthsAgo=new Date();sixMonthsAgo.setMonth(sixMonthsAgo.getMonth()-6);
+    const sinceDate=sixMonthsAgo.toISOString().split("T")[0];
+    const prompt=`You are a B2B sales researcher for Evolve ESolutions (IT/HR/Healthcare/Legal/Financial Services recruitment, Pleasanton CA).
 List 5 real companies that match:
 - ${target}
 - Size: ${size||"any"} | Location: ${loc||"any"} | Signal: ${sig}
 
+IMPORTANT: Buying signals must be from the last 6 months (since ${sinceDate}). Only include companies with verifiable recent activity — job postings, funding rounds, leadership changes, expansions, or news from this period. Do not include stale signals.
+
 Return ONLY a JSON array (no markdown, no explanation):
-[{"name":"","industry":"","size":"","location":"","website":"","signal":"specific hiring/growth signal","fitScore":80,"fitReason":"why Evolve should contact them"}]`;
+[{"name":"","industry":"","size":"","location":"","website":"","signal":"specific signal with approximate date e.g. Jan 2025","fitScore":80,"fitReason":"why Evolve should contact them now"}]`;
 
     try{
       const t=await ai(prompt,false);
@@ -801,20 +848,30 @@ function Enrich({company,idx,onBack,onOutreach,onSave,isSaved,cu,settings}){
   async function enrich(){
     setLoading(true);setErr("");setData(null);setCached(false);
     const prompt=`Business intelligence for Evolve ESolutions. Research ${company.name} (${company.website||company.industry}, ${company.location}).
-CRITICAL: Find and CLASSIFY contacts. Email: "Work" (company domain) or "Personal" (gmail etc.). Phone: "Direct", "Mobile", "Office", or "HQ".
+CRITICAL RULES FOR CONTACTS:
+1. Only include email if you have found it from a verifiable source (company website, press release, LinkedIn, etc). DO NOT guess or construct email addresses from name patterns.
+2. If email is unknown, set email to null. Never guess formats like firstname@company.com.
+3. Same for phone - only include if found from a real source. Set to null if unknown.
+4. Email type: "Work" (company domain) or "Personal" (gmail/yahoo etc). Null if no email found.
+5. Phone type: "Direct", "Mobile", "Office", or "HQ". Null if no phone found.
 Return ONLY valid JSON:
-{"description":"2-sentence overview","founded":"year","headcount":"estimate","revenue":"estimate or Private","funding":"round or Bootstrapped","recentNews":["3 items with dates"],"techStack":["3-5 tech"],"hiringRoles":["3-4 areas"],"keyContacts":[{"name":"","title":"","email":"","emailType":"Work or Personal","phone":"","phoneType":"Direct or Mobile or Office or HQ or Not found","linkedin":"","source":"AI"},{"name":"","title":"","email":"","emailType":"","phone":"","phoneType":"","linkedin":"","source":"AI"}],"painPoints":["2-3 points"],"approachAngle":"one specific angle for Evolve ESolutions","enrichmentSource":"AI"}`;
-    try{const t=await ai(prompt,false);const clean=t.replace(/```json\n?/g,"").replace(/```\n?/g,"").trim();const m=clean.match(/\{[\s\S]*\}/);if(m){const d=JSON.parse(m[0]);setData(d);await ss(`enr_${slug}`,d);if(sbUrl&&sbKey)sbSaveEnrichment(sbUrl,sbKey,slug,company.name,d);}else setErr("Parse failed. Try again.");}catch(e){setErr(`Enrichment failed: ${e.message}`);}setLoading(false);
+{"description":"2-sentence overview","founded":"year","headcount":"estimate","revenue":"estimate or Private","funding":"round or Bootstrapped","recentNews":["3 items with dates"],"techStack":["3-5 tech"],"hiringRoles":["3-4 areas"],"keyContacts":[{"name":"","title":"","email":null,"emailType":null,"phone":null,"phoneType":null,"linkedin":"","source":"AI","emailVerified":false},{"name":"","title":"","email":null,"emailType":null,"phone":null,"phoneType":null,"linkedin":"","source":"AI","emailVerified":false}],"painPoints":["2-3 points"],"approachAngle":"one specific angle for Evolve ESolutions","enrichmentSource":"AI"}`;
+    try{const t=await ai(prompt,false);const clean=t.replace(/```json\n?/g,"").replace(/```\n?/g,"").trim();const m=clean.match(/\{[\s\S]*\}/);if(m){const d=JSON.parse(m[0]);setData(d);await ss(`enr_${slug}`,d);if(sbUrl&&sbKey){sbSaveEnrichment(sbUrl,sbKey,slug,company.name,d);sbSaveContacts(sbUrl,sbKey,company.name,d.keyContacts||[]);}}else setErr("Parse failed. Try again.");}catch(e){setErr(`Enrichment failed: ${e.message}`);}setLoading(false);
   }
   async function enrichWithApollo(){
     if(!apolloKey){setErr("Add Apollo API key in Settings first.");return;}
     if(!data){setErr("Run AI enrichment first — Apollo overlays contacts on top of the AI research.");return;}
     setLoading(true);setErr("");setData(null);setCached(false);
     try{
-      const domain=company.website?.replace(/https?:\/\//,"").replace(/\/.*/,"")
-        ||company.name.toLowerCase().replace(/\s+/g,"")+".com";
+      // Extract clean domain from website or guess from company name
+      let domain=company.website?.replace(/https?:\/\//,"").replace(/\/.*/,"").replace(/^www\./,"")?.toLowerCase()?.trim()||"";
+      if(!domain||domain.length<4){
+        // Fallback: sanitize company name to domain guess
+        domain=company.name.toLowerCase().replace(/[^a-z0-9]/g,"").replace(/inc|llc|ltd|corp|co$/,"").trim()+".com";
+      }
+      console.log("Apollo domain search:",domain);
       // Apollo: fetch contacts only, keep existing AI company data
-      const peopleRes=await apolloFindContacts(domain,apolloKey).catch(()=>null);
+      const peopleRes=await apolloFindContacts(domain,apolloKey).catch((e)=>{console.error("Apollo error:",e);return null;});
       const people=(peopleRes?.people||[]).slice(0,3);
       if(!people.length){setErr("No contacts found via Apollo for this domain.");setLoading(false);return;}
       const apolloContacts=people.map(p=>({
@@ -831,7 +888,10 @@ Return ONLY valid JSON:
       const merged={...(data||{}),keyContacts:apolloContacts,enrichmentSource:"Apollo (contacts)"};
       setData(merged);
       await ss(`enr_${slug}`,merged);
-      if(sbUrl&&sbKey)sbSaveEnrichment(sbUrl,sbKey,slug,company.name,merged);
+      if(sbUrl&&sbKey){
+        sbSaveEnrichment(sbUrl,sbKey,slug,company.name,merged);
+        sbSaveContacts(sbUrl,sbKey,company.name,apolloContacts);
+      }
     }catch(e){setErr(`Apollo contact enrichment failed: ${e.message}`);}
     setLoading(false);
   }
@@ -901,15 +961,32 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
   const E=`Evolve ESolutions — IT, HR, Healthcare, Financial Services, Legal recruitment, Pleasanton CA. 24–48hr screened candidates. Passive talent. No placement no fee. 1–3 day onboarding.`;
   const iMap={"Technology / SaaS":"IT/software","Financial Services":"finance/compliance","Healthcare":"healthcare/clinical","Legal":"legal/paralegal","Manufacturing":"engineering/ops","E-commerce / Retail":"tech/ops","Construction":"project management","Professional Services":"professional/admin","Media & Marketing":"creative/marketing","Logistics & Supply Chain":"ops/tech"};
   const spec=iMap[company.industry]||company.industry;
-  const sig2=`${cu.displayName}\n${cu.title||"Account Manager"}\nEvolve ESolutions\n${cu.email||""} | ${cu.phone||""}\nevolveesolutions.com`;
+  // Emails use Instantly merge tags — sender name and signature injected per mailbox
+  const placeholderSig="{{sender_name}}\nEvolve ESolutions\n{{signature}}";
   const prompts={
-    intro:`Cold intro email, Evolve ESolutions to decision-maker at ${company.name}.\n${E}\nTarget: ${company.name}, ${company.industry}, ${company.size}, ${company.location}. Signal: ${company.signal}. Why: ${company.fitReason}\nHook on signal. One sentence on Evolve+${spec}. 24–48hr+passive talent pitch. Specific day CTA. Under 120 words body.\nSubject: [under 8 words]\n\n[body]\n\n${sig2}`,
-    followup:`Follow-up, Evolve ESolutions to ${company.name}, no reply.\n${E}\nSignal: ${company.signal}. Acknowledge busy. Different value (no-fee). Recent ${spec} placements. Soft CTA. Under 80 words.\nSubject: [subject]\n\n[body]\n\n${sig2}`,
-    casestudy:`Case study email, Evolve ESolutions to ${company.name}.\n${E}\nSignal: ${company.signal}. Mini case: similar company, similar role, timeline+outcome. Connect to ${company.name}. Under 110 words. CTA: share more.\nSubject: [subject]\n\n[body]\n\n${sig2}`,
-    value:`Value-add, Evolve ESolutions to ${company.name}. Not asking for anything.\n${E}\nSignal: ${company.signal}. Genuine insight on ${spec} hiring trends. Position as partner. Soft close. Under 100 words.\nSubject: [subject]\n\n[body]\n\n${sig2}`,
-    breakup:`Break-up email, Evolve ESolutions to ${company.name}. One-sided acknowledged. Door open. One final value line. Under 70 words. Best break-up emails get replies.\nSubject: [subject]\n\n[body]\n\n${sig2}`,
+    intro:`Write a cold intro email from Evolve ESolutions to a decision-maker at ${company.name}.\n${E}\nTarget: ${company.name}, ${company.industry}, ${company.size}, ${company.location}. Signal: ${company.signal}. Why: ${company.fitReason}\nHook on signal. One sentence on Evolve+${spec}. 24–48hr+passive talent pitch. Specific day CTA. Under 120 words body. Professional, human tone.\nSubject: [under 8 words, no "Introducing"]\n\n[email body]\n\n${placeholderSig}`,
+    followup:`Write a follow-up email from Evolve ESolutions to ${company.name} — no reply received.\n${E}\nSignal: ${company.signal}. Acknowledge they are busy. Lead with different value (no-fee model). Mention recent ${spec} placements. Soft CTA. Under 80 words.\nSubject: [subject]\n\n[email body]\n\n${placeholderSig}`,
+    casestudy:`Write a case study email from Evolve ESolutions to ${company.name}.\n${E}\nSignal: ${company.signal}. Include a mini case study: similar company, similar role, 24-48hr timeline, outcome. Connect directly to ${company.name}'s situation. Under 110 words. CTA: happy to share more.\nSubject: [subject]\n\n[email body]\n\n${placeholderSig}`,
+    value:`Write a value-add email from Evolve ESolutions to ${company.name} — asking for nothing.\n${E}\nSignal: ${company.signal}. Share a genuine hiring trend insight for ${spec}. Position as a knowledgeable partner. Soft close. Under 100 words.\nSubject: [subject]\n\n[email body]\n\n${placeholderSig}`,
+    breakup:`Write a break-up email from Evolve ESolutions to ${company.name}. Acknowledge it's one-sided. Leave the door open. One final value line. Under 70 words. The best break-up emails always get replies.\nSubject: [subject]\n\n[email body]\n\n${placeholderSig}`,
   };
-  async function gen(s,t){setStep(s);setEType(t||"intro");setContent("");setLoading(true);try{const txt=await ai(prompts[t||"intro"]||prompts.intro);setContent(txt);onLogAct(company,"outreach generated");}catch{setContent("Error. Try again.");}setLoading(false);}
+  async function gen(s,t){
+    setStep(s);setEType(t||"intro");setContent("");setLoading(true);
+    try{
+      const txt=await ai(prompts[t||"intro"]||prompts.intro);
+      setContent(txt);
+      onLogAct(company,"outreach generated");
+      // Save to DB
+      if(settings?.supabaseUrl&&settings?.supabaseKey){
+        const lines=txt.split("\n");
+        const subLine=lines.find(l=>l.toLowerCase().startsWith("subject:"))||"";
+        const subj=subLine.replace(/^subject:\s*/i,"").trim();
+        const body=lines.slice(lines.indexOf(subLine)+2).join("\n").trim();
+        sbSaveOutreach(settings.supabaseUrl,settings.supabaseKey,company.name,cu.username,tmpl.id,[{day:s.day,label:s.label,subject:subj,body}]);
+      }
+    }catch{setContent("Error. Try again.");}
+    setLoading(false);
+  }
 
   async function pushToInstantly(){
     if(!instantlyKey){setIErr("Add Instantly API key in Settings first.");return;}
@@ -933,6 +1010,10 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
       const campaignId=await instantlyCreateCampaign(instantlyKey,campaignName,contacts,steps);
       onLogAct(company,"pushed to Instantly");
       setIPushed(campaignId);
+      // Save full sequence to DB
+      if(settings?.supabaseUrl&&settings?.supabaseKey){
+        sbSaveOutreach(settings.supabaseUrl,settings.supabaseKey,company.name,cu.username,tmpl.id,steps,campaignId);
+      }
     }catch(e){setIErr(`Instantly push failed: ${e.message}`);}
     setIPushing(false);
   }
