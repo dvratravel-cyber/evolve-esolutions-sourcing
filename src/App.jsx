@@ -778,16 +778,15 @@ function Enrich({company,idx,onBack,onOutreach,onSave,isSaved,cu,settings}){
   const sbUrl=settings?.supabaseUrl;const sbKey=settings?.supabaseKey;
   const slug=company.name.toLowerCase().replace(/\s+/g,"_");
   useEffect(()=>{
-    // Try Supabase first (source of truth), fallback to localStorage
-    if(sbUrl&&sbKey){
-      sbReq(`${sbUrl}/rest/v1/enrichments?slug=eq.enr_${slug}&select=data`,sbKey)
-        .then(rows=>{
-          if(rows?.[0]?.data){setData(rows[0].data);setCached(true);await ss(`enr_${slug}`,rows[0].data);}
-          else sg(`enr_${slug}`).then(d=>{if(d){setData(d);setCached(true);}});
-        }).catch(()=>sg(`enr_${slug}`).then(d=>{if(d){setData(d);setCached(true);}}));
-    } else {
-      sg(`enr_${slug}`).then(d=>{if(d){setData(d);setCached(true);}});
+    async function loadCached(){
+      const local=await sg(`enr_${slug}`);
+      if(local){setData(local);setCached(true);return;}
+      if(sbUrl&&sbKey){
+        const sbData=await sbLoadEnrichment(sbUrl,sbKey,slug);
+        if(sbData){setData(sbData);setCached(true);ss(`enr_${slug}`,sbData);}
+      }
     }
+    loadCached();
   },[company.name]);
   async function enrich(){
     setLoading(true);setErr("");setData(null);setCached(false);
@@ -795,7 +794,7 @@ function Enrich({company,idx,onBack,onOutreach,onSave,isSaved,cu,settings}){
 CRITICAL: Find and CLASSIFY contacts. Email: "Work" (company domain) or "Personal" (gmail etc.). Phone: "Direct", "Mobile", "Office", or "HQ".
 Return ONLY valid JSON:
 {"description":"2-sentence overview","founded":"year","headcount":"estimate","revenue":"estimate or Private","funding":"round or Bootstrapped","recentNews":["3 items with dates"],"techStack":["3-5 tech"],"hiringRoles":["3-4 areas"],"keyContacts":[{"name":"","title":"","email":"","emailType":"Work or Personal","phone":"","phoneType":"Direct or Mobile or Office or HQ or Not found","linkedin":""},{"name":"","title":"","email":"","emailType":"","phone":"","phoneType":"","linkedin":""}],"painPoints":["2-3 points"],"approachAngle":"one specific angle for Evolve ESolutions"}`;
-    try{const t=await ai(prompt,true);const m=t.match(/\{[\s\S]*\}/);if(m){const d=JSON.parse(m[0]);setData(d);await ss(`enr_${slug}`,d);if(sbUrl&&sbKey)sbUpsert(sbUrl,sbKey,"enrichments",{slug:`enr_${slug}`,company:company.name,data:d},"slug");}else setErr("Parse failed. Try again.");}catch{setErr("Enrichment failed.");}setLoading(false);
+    try{const t=await ai(prompt,true);const m=t.match(/\{[\s\S]*\}/);if(m){const d=JSON.parse(m[0]);setData(d);await ss(`enr_${slug}`,d);if(sbUrl&&sbKey)sbSaveEnrichment(sbUrl,sbKey,slug,company.name,d);}else setErr("Parse failed. Try again.");}catch{setErr("Enrichment failed.");}setLoading(false);
   }
   async function enrichWithApollo(){
     if(!apolloKey){setErr("Add Apollo API key in Settings first.");return;}
