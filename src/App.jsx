@@ -884,8 +884,19 @@ function ImportTab({leads,onBatchSave,cu,settings}){
   }
 
   async function saveToPending(){
+    const isValidDomain=w=>{
+      if(!w||!w.trim())return true; // website is optional — blank is fine
+      const d=w.trim().replace(/https?:\/\//,"").replace(/^www\./,"").replace(/\/.*/,"").toLowerCase().trim();
+      return d.length>3&&d.includes(".")&&!d.includes(" ")&&/^[a-z0-9][a-z0-9\-\.]+\.[a-z]{2,}$/.test(d);
+    };
     const valid=rows.filter(r=>r.name.trim());
     if(!valid.length){setErr("Add at least one company name.");return;}
+    // Validate websites — highlight invalid ones
+    const invalidWebsites=valid.filter(r=>r.website&&!isValidDomain(r.website));
+    if(invalidWebsites.length){
+      setErr(`Invalid website${invalidWebsites.length>1?"s":""}: ${invalidWebsites.map(r=>`"${r.website}" (${r.name})`).join(", ")} — use format: company.com`);
+      return;
+    }
     const alreadyInQueue=queue.map(q=>q.name.toLowerCase());
     const alreadyLead=leads.map(l=>l.name.toLowerCase());
     const fresh=valid.filter(r=>!alreadyInQueue.includes(r.name.trim().toLowerCase())&&!alreadyLead.includes(r.name.trim().toLowerCase()));
@@ -906,7 +917,7 @@ function ImportTab({leads,onBatchSave,cu,settings}){
     }
     setRows([{name:"",website:"",id:Date.now()}]);
     setErr("");
-    setProcMsg(`Added ${newItems.length} companies added to pending queue.`);
+    setProcMsg(`Added ${newItems.length} companies to pending queue.`);
     setTimeout(()=>setProcMsg(""),3000);
   }
 
@@ -968,7 +979,7 @@ function ImportTab({leads,onBatchSave,cu,settings}){
                 <tr key={row.id} className="hover:bg-slate-50">
                   <td className="px-3 py-1.5 text-slate-400">{i+1}</td>
                   <td className="px-3 py-1.5"><input value={row.name} onChange={e=>updateRow(row.id,"name",e.target.value)} placeholder="Acme Corp" className="w-full bg-transparent outline-none text-slate-800 placeholder-slate-300"/></td>
-                  <td className="px-3 py-1.5"><input value={row.website} onChange={e=>updateRow(row.id,"website",e.target.value)} placeholder="acme.com" className="w-full bg-transparent outline-none text-slate-600 placeholder-slate-300"/></td>
+                  <td className="px-3 py-1.5"><input value={row.website} onChange={e=>updateRow(row.id,"website",e.target.value)} placeholder="acme.com" className={`w-full bg-transparent outline-none placeholder-slate-300 ${row.website&&!/^[a-z0-9][a-z0-9\-\.]+\.[a-z]{2,}$/i.test(row.website.trim().replace(/https?:\/\//,"").replace(/^www\./,"").replace(/\/.*/,"").toLowerCase())?"text-red-500":"text-slate-600"}`}/></td>
                   <td className="px-2 py-1.5"><button onClick={()=>removeRow(row.id)} className="text-slate-300 hover:text-red-400"><X size={12}/></button></td>
                 </tr>
               ))}
@@ -1420,6 +1431,99 @@ JSON array only (no text before or after):
 }
 
 // ══ SAVED LEADS ══
+// ══ COMPANY DETAIL — tabbed view wrapping Enrich + Outreach ══
+function CompanyDetail({company,idx,onBack,onSave,isSaved,cu,settings,onLogAct,onStage}){
+  const [tab,setTab]=useState("overview");
+  const TABS=[["overview","Overview"],["enrich","Enrich"],["outreach","Outreach"]];
+  const CLOSED_STAGES=["closed-won","closed-lost","closed-invalid"];
+  const stage=company.stage||"new";
+
+  return(
+    <div className="max-w-4xl mx-auto px-6 py-8">
+      {/* Breadcrumb */}
+      <div className="flex items-center gap-2 text-xs text-slate-400 mb-5">
+        <button onClick={onBack} className="hover:text-slate-700 flex items-center gap-1"><ArrowLeft size={11}/>All leads</button>
+        <span>/</span>
+        <span className="text-slate-600 font-medium">{company.name}</span>
+        <StageBadge stage={stage}/>
+        {company.source&&<SourceBadge source={company.source}/>}
+      </div>
+
+      {/* Header */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-5">
+        <div className="flex items-start gap-4">
+          <Av name={company.name} idx={idx} lg/>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap mb-1">
+              <h1 className="text-xl font-semibold text-slate-800">{company.name}</h1>
+              <Score s={company.fitScore}/>
+            </div>
+            <p className="text-sm text-slate-500">{company.industry}{company.size?` · ${company.size}`:""}{company.location?` · ${company.location}`:""}</p>
+            {company.website&&<a href={`https://${company.website}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline mt-1"><Globe size={11}/>{company.website}</a>}
+            {company.signal&&<p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-1.5 mt-2">{company.signal}</p>}
+          </div>
+          <div className="flex flex-col gap-2 flex-shrink-0">
+            <div className="flex gap-2">
+              <button onClick={()=>onSave(company)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border transition-all ${isSaved?"bg-slate-800 text-white border-slate-800":"border-slate-200 text-slate-700 hover:border-slate-400"}`}>
+                {isSaved?<><BookmarkCheck size={12}/>Saved</>:<><Bookmark size={12}/>Save</>}
+              </button>
+            </div>
+            {/* Stage move buttons */}
+            <div className="flex flex-wrap gap-1">
+              {stage!=="progress"&&!CLOSED_STAGES.includes(stage)&&<button onClick={()=>onStage(company.name,"progress")} className="px-2 py-1 text-xs border border-blue-200 text-blue-600 rounded-lg hover:bg-blue-50">Progress</button>}
+              {!CLOSED_STAGES.includes(stage)&&<>
+                <button onClick={()=>onStage(company.name,"closed-won")} className="px-2 py-1 text-xs border border-emerald-200 text-emerald-700 rounded-lg hover:bg-emerald-50">Won</button>
+                <button onClick={()=>onStage(company.name,"closed-lost")} className="px-2 py-1 text-xs border border-red-200 text-red-600 rounded-lg hover:bg-red-50">Lost</button>
+                <button onClick={()=>onStage(company.name,"closed-invalid")} className="px-2 py-1 text-xs border border-amber-200 text-amber-600 rounded-lg hover:bg-amber-50">Invalid</button>
+              </>}
+              {CLOSED_STAGES.includes(stage)&&<button onClick={()=>onStage(company.name,"new")} className="px-2 py-1 text-xs border border-slate-200 text-slate-500 rounded-lg hover:bg-slate-50">Re-open</button>}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Tab bar */}
+      <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl w-fit mb-5">
+        {TABS.map(([t,l])=>(
+          <button key={t} onClick={()=>setTab(t)} className={`px-5 py-2 rounded-lg text-xs font-semibold transition-all ${tab===t?"bg-white text-slate-800 shadow-sm":"text-slate-500 hover:text-slate-700"}`}>{l}</button>
+        ))}
+      </div>
+
+      {/* Tab content */}
+      {tab==="overview"&&(
+        <div className="space-y-4">
+          {/* Fit reason */}
+          {company.fitReason&&<div className="bg-white rounded-2xl border border-slate-200 p-5">
+            <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">Why Evolve should call</h3>
+            <p className="text-sm text-slate-700">{company.fitReason}</p>
+          </div>}
+          {/* Source + stage info */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-5">
+            <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Lead info</h3>
+            <div className="grid grid-cols-3 gap-4 text-xs">
+              <div><span className="text-slate-400 block mb-1">Source</span><span className="font-medium text-slate-700">{company.source?`${company.source.channel} - ${company.source.method}`:"Unknown"}</span></div>
+              <div><span className="text-slate-400 block mb-1">Stage</span><StageBadge stage={stage}/></div>
+              <div><span className="text-slate-400 block mb-1">Owner</span><span className="font-medium text-slate-700">{company.ownerName||"—"}</span></div>
+              {company.source?.label&&<div><span className="text-slate-400 block mb-1">Search</span><span className="font-medium text-slate-700">{company.source.label}</span></div>}
+            </div>
+          </div>
+          {/* Activity log */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-5">
+            <LogPanel log={company.activityLog||[]} isOwner={true} isAdmin={true}/>
+            {(!company.activityLog||!company.activityLog.length)&&<p className="text-xs text-slate-400 text-center py-4">No activity yet.</p>}
+          </div>
+        </div>
+      )}
+      {tab==="enrich"&&(
+        <Enrich company={company} idx={idx} onBack={()=>setTab("overview")} onOutreach={()=>setTab("outreach")} onSave={onSave} isSaved={isSaved} cu={cu} settings={settings} onLogAct={onLogAct}/>
+      )}
+      {tab==="outreach"&&(
+        <Outreach company={company} onBack={()=>setTab("overview")} onSave={onSave} isSaved={isSaved} cu={cu} onLogAct={onLogAct} settings={settings}/>
+      )}
+    </div>
+  );
+}
+
 function SourceBadge({source}){
   if(!source)return null;
   const icons={"Discover":"[D]","Import":"[I]","Manual":"[M]"};
@@ -1432,8 +1536,14 @@ function SourceBadge({source}){
 }
 
 function StageBadge({stage}){
-  const m={new:"bg-slate-100 text-slate-600",progress:"bg-blue-100 text-blue-700",closed:"bg-emerald-100 text-emerald-700"};
-  const l={new:"New",progress:"In Progress",closed:"Closed"};
+  const m={
+    new:"bg-slate-100 text-slate-600",
+    progress:"bg-blue-100 text-blue-700",
+    "closed-won":"bg-emerald-100 text-emerald-700",
+    "closed-lost":"bg-red-100 text-red-600",
+    "closed-invalid":"bg-amber-100 text-amber-700",
+  };
+  const l={new:"New",progress:"In Progress","closed-won":"Closed Won","closed-lost":"Closed Lost","closed-invalid":"Invalid"};
   return <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${m[stage]||m.new}`}>{l[stage]||"New"}</span>;
 }
 
@@ -1445,25 +1555,33 @@ function Saved({leads,onSave,onEnrich,onOutreach,cu,onStage,settings}){
   const staged=visible.filter(l=>(l.stage||"new")===stageTab);
   const filtered=ownerFilter==="all"?staged:staged.filter(l=>l.ownerId===ownerFilter);
   const owners=[...new Set(leads.map(l=>l.ownerId))];
-  const counts={new:visible.filter(l=>!l.stage||l.stage==="new").length,progress:visible.filter(l=>l.stage==="progress").length,closed:visible.filter(l=>l.stage==="closed").length};
+  const CLOSED_STAGES=["closed-won","closed-lost","closed-invalid"];
+  const counts={
+    new:visible.filter(l=>!l.stage||l.stage==="new").length,
+    progress:visible.filter(l=>l.stage==="progress").length,
+    "closed-won":visible.filter(l=>l.stage==="closed-won").length,
+    "closed-lost":visible.filter(l=>l.stage==="closed-lost").length,
+    "closed-invalid":visible.filter(l=>l.stage==="closed-invalid").length,
+  };
+  const totalClosed=CLOSED_STAGES.reduce((a,s)=>a+(counts[s]||0),0);
   return(
     <div className="max-w-4xl mx-auto px-6 py-8">
       <div className="flex items-center justify-between mb-4">
-        <div><h1 className="text-xl font-semibold text-slate-800">{isAdmin?"All leads":"My leads"}</h1><p className="text-sm text-slate-500">{visible.length} total · {counts.new} new · {counts.progress} in progress</p></div>
+        <div><h1 className="text-xl font-semibold text-slate-800">{isAdmin?"All leads":"My leads"}</h1><p className="text-sm text-slate-500">{visible.length} total · {counts.new} new · {counts.progress} in progress · {totalClosed} closed</p></div>
         {isAdmin&&owners.length>1&&<select value={ownerFilter} onChange={e=>setOwnerFilter(e.target.value)} className="px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none"><option value="all">All users</option>{owners.map(o=><option key={o} value={o}>{o}</option>)}</select>}
       </div>
       {/* Stage tabs */}
       <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl w-fit mb-5">
-        {[["new","New"],["progress","In Progress"],["closed","Closed"]].map(([s,l])=>(
+        {[["new","New"],["progress","In Progress"],["closed-won","Won"],["closed-lost","Lost"],["closed-invalid","Invalid"]].map(([s,l])=>(
           <button key={s} onClick={()=>setStageTab(s)} className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${stageTab===s?"bg-white text-slate-800 shadow-sm":"text-slate-500 hover:text-slate-700"}`}>
-            {l}<span className={`ml-1 px-1.5 py-0.5 rounded-full text-xs font-bold ${stageTab===s?"bg-slate-100 text-slate-600":"bg-slate-200 text-slate-400"}`}>{counts[s]}</span>
+            {l}<span className={`ml-1 px-1.5 py-0.5 rounded-full text-xs font-bold ${stageTab===s?"bg-slate-100 text-slate-600":"bg-slate-200 text-slate-400"}`}>{counts[s]||0}</span>
           </button>
         ))}
       </div>
       {filtered.length===0?<div className="bg-white rounded-2xl border border-slate-200 p-12 text-center"><Bookmark size={32} className="text-slate-300 mx-auto mb-3"/><div className="text-slate-500 text-sm">No leads here yet.</div></div>:(
         <div className="flex flex-col gap-3">
           {filtered.map((c,i)=>(
-            <div key={i} className="bg-white rounded-xl border border-slate-200 p-4">
+            <div key={i} className="bg-white rounded-xl border border-slate-200 p-4 cursor-pointer hover:border-slate-300 hover:shadow-sm transition-all" onClick={()=>onEnrich(c,i)}>
               <div className="flex items-center gap-3">
                 <Av name={c.name} idx={i}/>
                 <div className="flex-1 min-w-0">
@@ -1475,12 +1593,15 @@ function Saved({leads,onSave,onEnrich,onOutreach,cu,onStage,settings}){
                   <div className="text-xs text-slate-400 mt-0.5 truncate">{c.signal}</div>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
-                  <button onClick={()=>onEnrich(c,i)} className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-600 text-white rounded-lg text-xs font-medium hover:bg-violet-700"><TrendingUp size={12}/>Enrich</button>
-                  <button onClick={()=>onOutreach(c)} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-medium hover:bg-emerald-700"><Mail size={12}/>Outreach</button>
+                  <button onClick={e=>{e.stopPropagation();onEnrich(c,i);}} className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-600 text-white rounded-lg text-xs font-medium hover:bg-violet-700"><TrendingUp size={12}/>Open</button>
                   <div className="flex gap-1">
                     {(c.stage||"new")!=="progress"&&<button onClick={e=>{e.stopPropagation();onStage(c.name,"progress");}} className="px-2 py-1.5 text-xs border border-blue-200 text-blue-600 rounded-lg hover:bg-blue-50" title="Move to In Progress">→ Progress</button>}
-                    {(c.stage||"new")!=="closed"&&<button onClick={e=>{e.stopPropagation();onStage(c.name,"closed");}} className="px-2 py-1.5 text-xs border border-slate-200 text-slate-500 rounded-lg hover:bg-slate-50" title="Close lead">✓ Close</button>}
-                    {c.stage==="closed"&&<button onClick={e=>{e.stopPropagation();onStage(c.name,"new");}} className="px-2 py-1.5 text-xs border border-slate-200 text-slate-500 rounded-lg hover:bg-slate-50" title="Re-open">↩ Re-open</button>}
+                    {!["closed-won","closed-lost","closed-invalid"].includes(c.stage)&&<>
+                      <button onClick={e=>{e.stopPropagation();onStage(c.name,"closed-won");}} className="px-2 py-1.5 text-xs border border-emerald-200 text-emerald-700 rounded-lg hover:bg-emerald-50" title="Closed Won">Won</button>
+                      <button onClick={e=>{e.stopPropagation();onStage(c.name,"closed-lost");}} className="px-2 py-1.5 text-xs border border-red-200 text-red-600 rounded-lg hover:bg-red-50" title="Closed Lost">Lost</button>
+                      <button onClick={e=>{e.stopPropagation();onStage(c.name,"closed-invalid");}} className="px-2 py-1.5 text-xs border border-amber-200 text-amber-600 rounded-lg hover:bg-amber-50" title="Invalid">Invalid</button>
+                    </>}
+                    {["closed-won","closed-lost","closed-invalid"].includes(c.stage)&&<button onClick={e=>{e.stopPropagation();onStage(c.name,"new");}} className="px-2 py-1.5 text-xs border border-slate-200 text-slate-500 rounded-lg hover:bg-slate-50" title="Re-open">Re-open</button>}
                   </div>
                   <button onClick={()=>onSave(c)} className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 text-slate-500 rounded-lg text-xs hover:border-red-200 hover:text-red-500"><Trash2 size={12}/>Remove</button>
                 </div>
@@ -2243,6 +2364,7 @@ export default function App(){
   function setStage(companyName,stage){setLeads(prev=>{const n=prev.map(l=>{if(l.name!==companyName)return l;const updated={...l,stage};if(settings.supabaseUrl&&settings.supabaseKey)sbUpsert(settings.supabaseUrl,settings.supabaseKey,"leads",{name:updated.name,owner_id:updated.ownerId,owner_name:updated.ownerName,data:updated},"name");return updated;});ss(S_LEADS,n);return n;});}
   function isSaved(name){return leads.some(l=>l.name===name);}
   function goEnrich(c,i){setETarget(c);setEIdx(i||0);setView("enrich");}
+  function goCompany(company,i){setETarget(company);setEIdx(i||0);setView("company");}
   function goOutreach(c){setOTarget(c);setView("outreach");}
 
   const isAdmin=cu?.role==="admin";
@@ -2265,10 +2387,11 @@ export default function App(){
       </div>
 
       {view==="discover"&&<Discover leads={leads} onSave={toggleSave} onBatchSave={batchSave} onEnrich={goEnrich} onOutreach={goOutreach} cu={cu} niches={dynNiches} industries={dynIndustries} settings={settings}/>}
-      {view==="saved"&&<Saved leads={leads} onSave={toggleSave} onEnrich={goEnrich} onOutreach={goOutreach} cu={cu} onStage={setStage} settings={settings}/>}
+      {view==="saved"&&<Saved leads={leads} onSave={toggleSave} onEnrich={goCompany} onOutreach={goOutreach} cu={cu} onStage={setStage} settings={settings}/>}
       {view==="settings"&&isAdmin&&<SettingsView settings={settings} onSave={saveSettings} users={users} onAdd={addUser} onRemove={removeUser} onPwReset={pwReset} cu={cu} niches={dynNiches} industries={dynIndustries} onSaveNiches={saveNiches} onSaveIndustries={saveIndustries}/>}
-      {view==="enrich"&&eTarget&&<Enrich company={eTarget} idx={eIdx} onBack={()=>setView("discover")} onOutreach={goOutreach} onSave={toggleSave} isSaved={isSaved(eTarget.name)} cu={cu} settings={settings} onLogAct={logAct}/>}
-      {view==="outreach"&&oTarget&&<Outreach company={oTarget} onBack={()=>setView("discover")} onSave={toggleSave} isSaved={isSaved(oTarget.name)} cu={cu} onLogAct={logAct} settings={settings}/>}
+      {view==="company"&&eTarget&&<CompanyDetail company={eTarget} idx={eIdx} onBack={()=>setView("saved")} onSave={toggleSave} isSaved={isSaved(eTarget.name)} cu={cu} settings={settings} onLogAct={logAct} onStage={setStage}/>}
+      {view==="enrich"&&eTarget&&<Enrich company={eTarget} idx={eIdx} onBack={()=>setView("saved")} onOutreach={goOutreach} onSave={toggleSave} isSaved={isSaved(eTarget.name)} cu={cu} settings={settings} onLogAct={logAct}/>}
+      {view==="outreach"&&oTarget&&<Outreach company={oTarget} onBack={()=>setView("saved")} onSave={toggleSave} isSaved={isSaved(oTarget.name)} cu={cu} onLogAct={logAct} settings={settings}/>}
     </div>
   );
 }
