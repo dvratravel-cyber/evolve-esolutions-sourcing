@@ -5,7 +5,7 @@ import {
   TrendingUp, Users, Globe, Zap, CheckCircle2, BarChart2,
   Target, Trash2, FileText, Settings, Download, Play, Square,
   Key, Database, Mic, LogOut, UserPlus, Shield, User, Eye,
-  EyeOff, Clock, Activity, ChevronDown, ChevronRight, Tag, X
+  EyeOff, Clock, Activity, ChevronDown, ChevronRight, Tag, X, Pencil, Check
 } from "lucide-react";
 
 const ANTHROPIC_API   = "https://api.anthropic.com/v1/messages";
@@ -947,6 +947,14 @@ function Enrich({company,idx,onBack,onOutreach,onSave,isSaved,cu,settings}){
   const [showAddContact,setShowAddContact]=useState(false);
   const [newContact,setNewContact]=useState({name:"",title:"",email:"",phone:""});
   const [addContactErr,setAddContactErr]=useState("");
+  const [editIdx,setEditIdx]=useState(null); // index of contact being edited
+  const [editContact,setEditContact]=useState({name:"",title:"",email:"",phone:"",linkedin:""});
+
+  function saveToCache(updated){
+    setData(updated);
+    ss(`enr_${slug}`,updated);
+    if(sbUrl&&sbKey){sbSaveEnrichment(sbUrl,sbKey,slug,company.name,updated);sbSaveContacts(sbUrl,sbKey,company.name,updated.keyContacts);}
+  }
 
   function addContactManually(){
     if(!newContact.name.trim()){setAddContactErr("Name is required.");return;}
@@ -959,23 +967,38 @@ function Enrich({company,idx,onBack,onOutreach,onSave,isSaved,cu,settings}){
       emailType:newContact.email.trim()?"Work":null,
       phone:newContact.phone.trim()||null,
       phoneType:newContact.phone.trim()?"Direct":null,
-      linkedin:null,
+      linkedin:newContact.linkedin?.trim()||null,
       source:"Manual",
     };
-    const updated={...(data||{}),keyContacts:[...current,contact]};
-    setData(updated);
-    ss(`enr_${slug}`,updated);
-    if(sbUrl&&sbKey){sbSaveEnrichment(sbUrl,sbKey,slug,company.name,updated);sbSaveContacts(sbUrl,sbKey,company.name,updated.keyContacts);}
-    setNewContact({name:"",title:"",email:"",phone:""});
-    setAddContactErr("");
-    setShowAddContact(false);
+    saveToCache({...(data||{}),keyContacts:[...current,contact]});
+    setNewContact({name:"",title:"",email:"",phone:"",linkedin:""});
+    setAddContactErr("");setShowAddContact(false);
+  }
+
+  function startEdit(idx){
+    const ct=data.keyContacts[idx];
+    setEditContact({name:ct.name||"",title:ct.title||"",email:ct.email||"",phone:ct.phone||"",linkedin:ct.linkedin||""});
+    setEditIdx(idx);setShowAddContact(false);
+  }
+
+  function saveEdit(){
+    if(!editContact.name.trim()){return;}
+    const updated={...data,keyContacts:data.keyContacts.map((ct,i)=>i===editIdx?{
+      ...ct,
+      name:editContact.name.trim(),
+      title:editContact.title.trim(),
+      email:editContact.email.trim()||null,
+      emailType:editContact.email.trim()?"Work":ct.emailType,
+      phone:editContact.phone.trim()||null,
+      phoneType:editContact.phone.trim()?ct.phoneType||"Direct":null,
+      linkedin:editContact.linkedin.trim()||null,
+    }:ct)};
+    saveToCache(updated);
+    setEditIdx(null);
   }
 
   function removeContact(idx){
-    const updated={...data,keyContacts:data.keyContacts.filter((_,i)=>i!==idx)};
-    setData(updated);
-    ss(`enr_${slug}`,updated);
-    if(sbUrl&&sbKey){sbSaveEnrichment(sbUrl,sbKey,slug,company.name,updated);sbSaveContacts(sbUrl,sbKey,company.name,updated.keyContacts);}
+    saveToCache({...data,keyContacts:data.keyContacts.filter((_,i)=>i!==idx)});
   }
   const apolloKey=settings?.apolloKey||"";
   const sbUrl=settings?.supabaseUrl;const sbKey=settings?.supabaseKey;
@@ -1103,6 +1126,7 @@ Return ONLY valid JSON:
               <div><label className="block text-xs text-slate-500 mb-1">Title</label><input value={newContact.title} onChange={e=>setNewContact(p=>({...p,title:e.target.value}))} placeholder="CEO" className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 focus:outline-none focus:border-slate-400"/></div>
               <div><label className="block text-xs text-slate-500 mb-1">Email</label><input value={newContact.email} onChange={e=>setNewContact(p=>({...p,email:e.target.value}))} placeholder="jane@company.com" className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 focus:outline-none focus:border-slate-400"/></div>
               <div><label className="block text-xs text-slate-500 mb-1">Phone</label><input value={newContact.phone} onChange={e=>setNewContact(p=>({...p,phone:e.target.value}))} placeholder="+1 925 xxx xxxx" className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 focus:outline-none focus:border-slate-400"/></div>
+              <div className="col-span-2"><label className="block text-xs text-slate-500 mb-1">LinkedIn URL</label><input value={newContact.linkedin||""} onChange={e=>setNewContact(p=>({...p,linkedin:e.target.value}))} placeholder="https://linkedin.com/in/jane-smith" className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 focus:outline-none focus:border-slate-400"/></div>
             </div>
             {addContactErr&&<p className="text-xs text-red-500 mb-2">{addContactErr}</p>}
             <button onClick={addContactManually} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 text-white text-xs rounded-lg hover:bg-slate-700"><UserPlus size={11}/>Add contact</button>
@@ -1111,8 +1135,29 @@ Return ONLY valid JSON:
           <div className="grid grid-cols-2 gap-3">
             {(data.keyContacts||[]).map((ct,i)=>(
               <div key={i} className="relative group">
-                <CC c={ct} i={i}/>
-                <button onClick={()=>removeContact(i)} className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity w-5 h-5 flex items-center justify-center rounded bg-red-50 border border-red-200 text-red-400 hover:text-red-600" title="Remove contact"><X size={10}/></button>
+                {editIdx===i?(
+                  <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
+                    <p className="text-xs font-semibold text-blue-700 mb-2 flex items-center gap-1"><Pencil size={10}/>Edit contact</p>
+                    <div className="space-y-1.5 mb-2">
+                      {[["Name","name","Jane Smith"],["Title","title","CEO"],["Email","email","jane@co.com"],["Phone","phone","+1 925 xxx"],["LinkedIn","linkedin","linkedin.com/in/..."]].map(([lbl,key,ph])=>(
+                        <div key={key}><label className="block text-xs text-slate-500 mb-0.5">{lbl}</label><input value={editContact[key]||""} onChange={e=>setEditContact(p=>({...p,[key]:e.target.value}))} placeholder={ph} className="w-full px-2 py-1 text-xs rounded border border-blue-200 focus:outline-none focus:border-blue-400 bg-white"/></div>
+                      ))}
+                    </div>
+                    <div className="flex gap-1.5">
+                      <button onClick={saveEdit} className="flex items-center gap-1 px-2.5 py-1 bg-slate-800 text-white text-xs rounded-lg hover:bg-slate-700"><Check size={10}/>Save</button>
+                      <button onClick={()=>setEditIdx(null)} className="px-2.5 py-1 text-xs border border-slate-200 rounded-lg text-slate-500 hover:border-slate-400">Cancel</button>
+                      <button onClick={()=>{removeContact(i);setEditIdx(null);}} className="ml-auto px-2.5 py-1 text-xs border border-red-200 rounded-lg text-red-400 hover:text-red-600">Remove</button>
+                    </div>
+                  </div>
+                ):(
+                  <>
+                    <CC c={ct} i={i}/>
+                    <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button onClick={()=>startEdit(i)} className="w-5 h-5 flex items-center justify-center rounded bg-blue-50 border border-blue-200 text-blue-500 hover:text-blue-700" title="Edit contact"><Pencil size={9}/></button>
+                      <button onClick={()=>removeContact(i)} className="w-5 h-5 flex items-center justify-center rounded bg-red-50 border border-red-200 text-red-400 hover:text-red-600" title="Remove contact"><X size={9}/></button>
+                    </div>
+                  </>
+                )}
               </div>
             ))}
           </div>
@@ -1141,7 +1186,7 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
   });
   const [liC,setLiC]=useState([]);const [liMsg,setLiMsg]=useState({});const [liLoad,setLiLoad]=useState({});const [liCp,setLiCp]=useState("");const [liOpen,setLiOpen]=useState(true);
   const [phC,setPhC]=useState([]);const [scripts,setScripts]=useState({});const [texts,setTexts]=useState({});const [audios,setAudios]=useState({});const [playing,setPlaying]=useState({});const [lScript,setLScript]=useState({});const [lText,setLText]=useState({});const [lVoice,setLVoice]=useState({});const [phTab,setPhTab]=useState({});const [phCp,setPhCp]=useState("");const [phOpen,setPhOpen]=useState(true);
-  const [iPushing,setIPushing]=useState(false);const [iPushed,setIPushed]=useState(false);const [iErr,setIErr]=useState("");
+  const [iPushing,setIPushing]=useState(false);const [iPushed,setIPushed]=useState(false);const [iErr,setIErr]=useState("");const [iSkipped,setISkipped]=useState(0);
   const aRefs=useRef({});
   const instantlyKey=settings?.instantlyV2Key||settings?.instantlyKey||"";
   useEffect(()=>{sg(`enr_${company.name.toLowerCase().replace(/\s+/g,"_")}`).then(d=>{if(d?.keyContacts){setLiC(d.keyContacts.filter(c=>c.linkedin&&c.linkedin.length>5));setPhC(d.keyContacts.filter(c=>c.phone&&c.phone!=="Not found"));}});},[company.name]);
@@ -1197,7 +1242,10 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
       // Use pre-generated steps from state
       const steps=emailSteps.map(s=>generatedSteps[s.label]).filter(Boolean);
       const enriched=await sg(`enr_${company.name.toLowerCase().replace(/\s+/g,"_")}`);
-      const contacts=(enriched?.keyContacts||[]).filter(c=>c.email&&c.email!=="Not found"&&c.email!==null).map(c=>({...c,company:company.name}));
+      const allContacts=(enriched?.keyContacts||[]).map(c=>({...c,company:company.name}));
+      const contacts=allContacts.filter(c=>c.email&&c.email!=="Not found"&&c.email!==null);
+      const skipped=allContacts.length-contacts.length;
+      setISkipped(skipped);
       const campaignName=`Evolve — ${company.name} — ${new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`;
       const campaignId=await instantlyCreateCampaign(instantlyKey,campaignName,contacts,steps);
       onLogAct(company,"pushed to Instantly");
@@ -1230,7 +1278,7 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
       <div className={`rounded-xl border px-4 py-3 mb-5 flex items-center justify-between gap-4 ${iPushed?"bg-emerald-50 border-emerald-100":"bg-slate-50 border-slate-200"}`}>
         <div className="flex-1 min-w-0">
           {iPushed?(
-            <div className="flex items-center gap-2"><CheckCircle2 size={14} className="text-emerald-500 flex-shrink-0"/><div><p className="text-xs font-semibold text-emerald-700">Campaign draft created in Instantly</p><p className="text-xs text-emerald-600">ID: {iPushed} — go to Instantly and activate it to start sending.</p></div></div>
+            <div className="flex items-center gap-2"><CheckCircle2 size={14} className="text-emerald-500 flex-shrink-0"/><div><p className="text-xs font-semibold text-emerald-700">Campaign draft created in Instantly</p><p className="text-xs text-emerald-600">ID: {iPushed} — go to Instantly and activate it to start sending.{iSkipped>0&&` (${iSkipped} contact${iSkipped!==1?"s":""} without email skipped)`}</p></div></div>
           ):(
             <div>
               <p className="text-xs font-semibold text-slate-700">Push full sequence to Instantly</p>
