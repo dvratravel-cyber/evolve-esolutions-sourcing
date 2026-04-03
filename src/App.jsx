@@ -310,23 +310,28 @@ async function instantlyCreateCampaign(apiKey,campaignName,contacts,emailSteps){
   const campaignId=camp.id;
   if(!campaignId)throw new Error("Campaign created but no ID returned");
 
-  // Step 2: Add contacts as leads (v2 — one per request)
-  const validContacts=contacts.filter(c=>c.email&&c.email!=="Not found"&&c.email!==null);
-  const leadErrors=[];
-  for(const contact of validContacts){
-    try{
-      await instantlyProxy(apiKey,"/api/v2/leads",{
-        email:contact.email,
-        first_name:contact.name?.split(" ")[0]||"",
-        last_name:contact.name?.split(" ").slice(1).join(" ")||"",
-        company_name:contact.company||"",
-        campaign_id:campaignId,
-      });
-    }catch(e){
-      leadErrors.push(`${contact.email}: ${e.message}`);
+  // Step 2: Add all contacts in ONE bulk call — correct endpoint is /api/v2/leads/add
+  // campaign_id goes at top level, leads is an array — NOT campaign_id inside each lead
+  const validContacts=contacts.filter(c=>c.email&&c.email!=="Not found"&&c.email!==null&&c.email.includes("@"));
+  if(validContacts.length){
+    const leadsPayload={
+      campaign_id:campaignId,
+      leads:validContacts.map(c=>({
+        email:c.email,
+        first_name:c.name?.split(" ")[0]||"",
+        last_name:c.name?.split(" ").slice(1).join(" ")||"",
+        company_name:c.company||"",
+        phone:c.phone||"",
+        website:c.linkedin||"",
+      })),
+    };
+    const addResult=await instantlyProxy(apiKey,"/api/v2/leads/add",leadsPayload);
+    console.log("Instantly leads/add result:",addResult);
+    // addResult has: { status, leads_uploaded, skipped_count, invalid_email_count, duplicated_leads }
+    if(addResult.leads_uploaded===0&&validContacts.length>0){
+      console.warn("Leads sent but 0 uploaded:",addResult);
     }
   }
-  if(leadErrors.length)console.warn("Some leads failed to add:",leadErrors);
   return campaignId;
 }
 
