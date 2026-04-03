@@ -228,17 +228,20 @@ async function apolloFindContacts(domain,apiKey){
           :null
       );
 
-      // Phone: Apollo Basic returns direct numbers when available without waterfall
+      // Phone: try person direct/mobile first, then fall back to org HQ phone (all free, no extra credit)
       const bestPhone=ep.phone_numbers?.find(n=>n.type==="direct_phone")||
                       ep.phone_numbers?.find(n=>n.type==="mobile_phone")||
                       ep.phone_numbers?.[0];
+      const orgPhone=ep.organization?.phone||null;
+      const phone=bestPhone?.raw_number||bestPhone?.sanitized_number||null;
+      const phoneType=bestPhone?.type?.replace(/_/g," ")||null;
 
       return {
         name,title,
         email:ep.email||null,
         emailType:ep.email?(ep.email.includes(domain)?"Work":"Personal"):null,
-        phone:bestPhone?.raw_number||bestPhone?.sanitized_number||null,
-        phoneType:bestPhone?.type?.replace(/_/g," ")||null,
+        phone:phone||(orgPhone?orgPhone:null),
+        phoneType:phone?phoneType:(orgPhone?"HQ":null),
         linkedin,
         source:"Apollo",
       };
@@ -309,15 +312,21 @@ async function instantlyCreateCampaign(apiKey,campaignName,contacts,emailSteps){
 
   // Step 2: Add contacts as leads (v2 — one per request)
   const validContacts=contacts.filter(c=>c.email&&c.email!=="Not found"&&c.email!==null);
+  const leadErrors=[];
   for(const contact of validContacts){
-    await instantlyProxy(apiKey,"/api/v2/leads",{
-      email:contact.email,
-      first_name:contact.name?.split(" ")[0]||"",
-      last_name:contact.name?.split(" ").slice(1).join(" ")||"",
-      company_name:contact.company||"",
-      campaign_id:campaignId,
-    }).catch(e=>console.warn("Lead add failed:",e.message));
+    try{
+      await instantlyProxy(apiKey,"/api/v2/leads",{
+        email:contact.email,
+        first_name:contact.name?.split(" ")[0]||"",
+        last_name:contact.name?.split(" ").slice(1).join(" ")||"",
+        company_name:contact.company||"",
+        campaign_id:campaignId,
+      });
+    }catch(e){
+      leadErrors.push(`${contact.email}: ${e.message}`);
+    }
   }
+  if(leadErrors.length)console.warn("Some leads failed to add:",leadErrors);
   return campaignId;
 }
 
@@ -1091,7 +1100,14 @@ Return ONLY valid JSON:
         setLoading(false);return;
       }
       // apolloFindContacts already returns structured contacts — pass through directly
-      const apolloContacts=people;
+      // Clean legacy "Not found" strings from older cache entries → null
+      const apolloContacts=people.map(p=>({
+        ...p,
+        email:(p.email&&p.email!=="Not found"&&p.email.includes("@"))?p.email:null,
+        phone:(p.phone&&p.phone!=="Not found")?p.phone:null,
+        phoneType:(p.phoneType&&p.phoneType!=="Not found")?p.phoneType:null,
+        name:(p.name&&p.name!=="Unknown")?p.name:"",
+      })).filter(p=>p.name);
       // Merge: keep existing contacts + add Apollo ones, cap at 5
       const existing=(data?.keyContacts||[]).filter(x=>x.source!=="Apollo");
       const combined=[...existing,...apolloContacts].slice(0,5);
@@ -1228,7 +1244,7 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
   });
   const [liC,setLiC]=useState([]);const [liMsg,setLiMsg]=useState({});const [liLoad,setLiLoad]=useState({});const [liCp,setLiCp]=useState("");const [liOpen,setLiOpen]=useState(true);
   const [phC,setPhC]=useState([]);const [scripts,setScripts]=useState({});const [texts,setTexts]=useState({});const [audios,setAudios]=useState({});const [playing,setPlaying]=useState({});const [lScript,setLScript]=useState({});const [lText,setLText]=useState({});const [lVoice,setLVoice]=useState({});const [phTab,setPhTab]=useState({});const [phCp,setPhCp]=useState("");const [phOpen,setPhOpen]=useState(true);
-  const [iPushing,setIPushing]=useState(false);const [iPushed,setIPushed]=useState(false);const [iErr,setIErr]=useState("");const [iSkipped,setISkipped]=useState(0);
+  const [iPushing,setIPushing]=useState(false);const [iPushed,setIPushed]=useState(false);const [iErr,setIErr]=useState("");const [iSkipped,setISkipped]=useState(0);const [iSent,setISent]=useState(0);
   const [history,setHistory]=useState([]);
   useEffect(()=>{
     // Load push history from Supabase
@@ -1323,6 +1339,7 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
       const contacts=allContacts.filter(c=>c.email&&c.email!=="Not found"&&c.email!==null&&c.email.includes("@"));
       const skipped=allContacts.length-contacts.length;
       setISkipped(skipped);
+      setISent(contacts.length);
       if(!contacts.length){setIErr("No contacts with valid emails found. Add or edit contact emails in the Enrich view first.");setIPushing(false);return;}
       const campaignName=`Evolve — ${company.name} — ${new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`;
       const campaignId=await instantlyCreateCampaign(instantlyKey,campaignName,contacts,steps);
@@ -1356,7 +1373,11 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
       <div className={`rounded-xl border px-4 py-3 mb-5 flex items-center justify-between gap-4 ${iPushed?"bg-emerald-50 border-emerald-100":"bg-slate-50 border-slate-200"}`}>
         <div className="flex-1 min-w-0">
           {iPushed?(
-            <div className="flex items-center gap-2"><CheckCircle2 size={14} className="text-emerald-500 flex-shrink-0"/><div><p className="text-xs font-semibold text-emerald-700">Campaign draft created in Instantly</p><p className="text-xs text-emerald-600">ID: {iPushed} — go to Instantly and activate it to start sending.{iSkipped>0&&` (${iSkipped} contact${iSkipped!==1?"s":""} without email skipped)`}</p></div></div>
+            <div className="flex items-center gap-2"><CheckCircle2 size={14} className="text-emerald-500 flex-shrink-0"/><div><p className="text-xs font-semibold text-emerald-700">Campaign draft created in Instantly</p><div>
+                <p className="text-xs text-emerald-600 font-medium">Campaign created — activate it in Instantly to start sending.</p>
+                <p className="text-xs text-emerald-500 mt-0.5">ID: {iPushed}</p>
+                <p className="text-xs text-emerald-500">{iSent} lead{iSent!==1?"s":""} added{iSkipped>0?` · ${iSkipped} skipped (no email)`:""}</p>
+              </div></div></div>
           ):(
             <div>
               <p className="text-xs font-semibold text-slate-700">Push full sequence to Instantly</p>
