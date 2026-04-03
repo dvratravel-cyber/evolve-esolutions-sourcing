@@ -332,7 +332,7 @@ async function instantlyCreateCampaign(apiKey,campaignName,contacts,emailSteps){
       console.warn("Leads sent but 0 uploaded:",addResult);
     }
   }
-  return campaignId;
+  return {campaignId, addResult: validContacts.length ? addResult : null};
 }
 
 // ── Claude AI ──
@@ -1279,7 +1279,7 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
   });
   const [liC,setLiC]=useState([]);const [liMsg,setLiMsg]=useState({});const [liLoad,setLiLoad]=useState({});const [liCp,setLiCp]=useState("");const [liOpen,setLiOpen]=useState(true);
   const [phC,setPhC]=useState([]);const [scripts,setScripts]=useState({});const [texts,setTexts]=useState({});const [audios,setAudios]=useState({});const [playing,setPlaying]=useState({});const [lScript,setLScript]=useState({});const [lText,setLText]=useState({});const [lVoice,setLVoice]=useState({});const [phTab,setPhTab]=useState({});const [phCp,setPhCp]=useState("");const [phOpen,setPhOpen]=useState(true);
-  const [iPushing,setIPushing]=useState(false);const [iPushed,setIPushed]=useState(false);const [iErr,setIErr]=useState("");const [iSkipped,setISkipped]=useState(0);const [iSent,setISent]=useState(0);
+  const [iPushing,setIPushing]=useState(false);const [iPushed,setIPushed]=useState(false);const [iErr,setIErr]=useState("");const [iSkipped,setISkipped]=useState(0);const [iSent,setISent]=useState(0);const [iResult,setIResult]=useState(null);
   const [history,setHistory]=useState([]);
   useEffect(()=>{
     // Load push history from Supabase
@@ -1389,7 +1389,9 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
         setIErr(reason);setIPushing(false);return;
       }
       const campaignName=`Evolve — ${company.name} — ${new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`;
-      const campaignId=await instantlyCreateCampaign(instantlyKey,campaignName,contacts,steps);
+      const pushResult=await instantlyCreateCampaign(instantlyKey,campaignName,contacts,steps);
+      const campaignId=pushResult.campaignId||pushResult;
+      if(pushResult.addResult)setIResult(pushResult.addResult);
       onLogAct(company,`pushed to Instantly · ${tmpl.label} · ${contacts.length} contact${contacts.length!==1?"s":""} · ID: ${campaignId}`);
       setIPushed(campaignId);
       // Save full sequence to DB
