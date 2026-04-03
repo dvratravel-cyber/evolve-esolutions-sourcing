@@ -978,10 +978,37 @@ function ImportTab({leads,onBatchSave,cu,settings}){
     setTimeout(()=>setProcMsg(""),5000);
   }
 
+  const [selectedIds,setSelectedIds]=useState(new Set());
+
+  function toggleSelect(id){
+    setSelectedIds(prev=>{const n=new Set(prev);n.has(id)?n.delete(id):n.add(id);return n;});
+  }
+  function toggleSelectAll(){
+    if(selectedIds.size===queue.length){setSelectedIds(new Set());}
+    else{setSelectedIds(new Set(queue.map(r=>r.id)));}
+  }
   function removeFromQueue(id){
     const updated=queue.filter(q=>q.id!==id);
     saveQueue(updated);
+    setSelectedIds(prev=>{const n=new Set(prev);n.delete(id);return n;});
     if(settings?.supabaseUrl&&settings?.supabaseKey) sbDeleteImportRow(settings.supabaseUrl,settings.supabaseKey,id);
+  }
+  function removeSelected(){
+    const toRemove=[...selectedIds];
+    const updated=queue.filter(q=>!toRemove.includes(q.id));
+    saveQueue(updated);
+    setSelectedIds(new Set());
+    if(settings?.supabaseUrl&&settings?.supabaseKey){
+      toRemove.forEach(id=>sbDeleteImportRow(settings.supabaseUrl,settings.supabaseKey,id));
+    }
+  }
+  function clearAll(){
+    if(!window.confirm(`Remove all ${queue.length} rows from queue? This cannot be undone.`))return;
+    if(settings?.supabaseUrl&&settings?.supabaseKey){
+      queue.forEach(r=>sbDeleteImportRow(settings.supabaseUrl,settings.supabaseKey,r.id));
+    }
+    saveQueue([]);
+    setSelectedIds(new Set());
   }
 
   const pendingCount=queue.filter(r=>r.status==="pending").length;
@@ -1037,9 +1064,17 @@ function ImportTab({leads,onBatchSave,cu,settings}){
             <h3 className="text-sm font-semibold text-slate-800">Pending queue <span className="ml-1 text-xs text-slate-400">{pendingCount} / {MAX_PENDING}</span></h3>
             <p className="text-xs text-slate-500 mt-0.5">Click "Process next 2" to convert companies to leads. Enrich them one-by-one from the lead detail.</p>
           </div>
-          <button onClick={()=>processNext(2)} disabled={processing||!pendingCount} className="flex items-center gap-1.5 px-4 py-2 bg-violet-600 text-white rounded-xl text-xs font-medium hover:bg-violet-700 disabled:opacity-50">
-            {processing?<><Loader2 size={11} className="animate-spin"/>Processing...</>:<><Zap size={11}/>Process next 2</>}
-          </button>
+          <div className="flex items-center gap-2">
+            {selectedIds.size>0&&<button onClick={removeSelected} className="flex items-center gap-1.5 px-3 py-1.5 bg-red-50 border border-red-200 text-red-600 rounded-xl text-xs font-medium hover:bg-red-100">
+              <X size={11}/>Delete {selectedIds.size} selected
+            </button>}
+            {queue.length>0&&<button onClick={clearAll} className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 text-slate-500 rounded-xl text-xs font-medium hover:bg-slate-50">
+              Clear all
+            </button>}
+            <button onClick={()=>processNext(2)} disabled={processing||!pendingCount} className="flex items-center gap-1.5 px-4 py-2 bg-violet-600 text-white rounded-xl text-xs font-medium hover:bg-violet-700 disabled:opacity-50">
+              {processing?<><Loader2 size={11} className="animate-spin"/>Processing...</>:<><Zap size={11}/>Process next 2</>}
+            </button>
+          </div>
         </div>
         {queue.length===0?(
           <p className="text-xs text-slate-400 text-center py-6">No companies in queue. Add companies above and save to pending.</p>
@@ -1047,11 +1082,12 @@ function ImportTab({leads,onBatchSave,cu,settings}){
           <div className="rounded-xl border border-slate-200 overflow-hidden">
             <table className="w-full text-xs">
               <thead className="bg-slate-50 border-b border-slate-200">
-                <tr><th className="px-3 py-2 text-left text-slate-500 font-medium">Company</th><th className="px-3 py-2 text-left text-slate-500 font-medium">Website</th><th className="px-3 py-2 text-left text-slate-500 font-medium">Added by</th><th className="px-3 py-2 text-left text-slate-500 font-medium">Status</th><th className="px-2 py-2 w-8"></th></tr>
+                <tr><th className="px-3 py-2 w-8"><input type="checkbox" checked={selectedIds.size===queue.length&&queue.length>0} onChange={toggleSelectAll} className="rounded"/></th><th className="px-3 py-2 text-left text-slate-500 font-medium">Company</th><th className="px-3 py-2 text-left text-slate-500 font-medium">Website</th><th className="px-3 py-2 text-left text-slate-500 font-medium">Added by</th><th className="px-3 py-2 text-left text-slate-500 font-medium">Status</th><th className="px-2 py-2 w-8"></th></tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {queue.slice(0,50).map((row,i)=>(
-                  <tr key={row.id||i} className={`hover:bg-slate-50 ${row.status==="done"?"opacity-50":""}`}>
+                  <tr key={row.id||i} className={`hover:bg-slate-50 ${selectedIds.has(row.id)?"bg-blue-50":""} ${row.status==="done"?"opacity-50":""}`}>
+                    <td className="px-3 py-2"><input type="checkbox" checked={selectedIds.has(row.id)} onChange={()=>toggleSelect(row.id)} onClick={e=>e.stopPropagation()} className="rounded"/></td>
                     <td className="px-3 py-2 font-medium text-slate-800">{row.name}</td>
                     <td className="px-3 py-2 text-slate-500">{row.website||"—"}</td>
                     <td className="px-3 py-2 text-slate-400">{row.ownerName||row.ownerId||"—"}</td>
@@ -1060,7 +1096,7 @@ function ImportTab({leads,onBatchSave,cu,settings}){
                       {row.status==="done"&&<span className="inline-flex items-center gap-1 text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">✓ Converted</span>}
                       {row.status==="error"&&<span className="inline-flex items-center gap-1 text-red-500 bg-red-50 px-2 py-0.5 rounded-full">✗ Error</span>}
                     </td>
-                    <td className="px-2 py-2"><button onClick={()=>removeFromQueue(row.id)} className="text-slate-300 hover:text-red-400"><X size={11}/></button></td>
+                    <td className="px-2 py-2"><button onClick={e=>{e.stopPropagation();removeFromQueue(row.id);}} className="text-slate-300 hover:text-red-500 transition-colors" title="Remove this row"><X size={12}/></button></td>
                   </tr>
                 ))}
               </tbody>
