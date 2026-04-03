@@ -869,7 +869,7 @@ Rules:
         saveResults(parsed);
       }
 
-      // ── Mode 3: Apollo — verified company database ──
+      // ── Mode 3: Apollo — verified company database + Claude signals ──
       else if(src==="apollo"){
         const s=await sg(S_SETTINGS);
         const apolloKey=s?.apolloKey;
@@ -878,22 +878,48 @@ Rules:
         const orgRes=await apolloSearchOrgs(searchTerm,size,loc,apolloKey);
         const orgs=(orgRes?.organizations||[]).slice(0,5);
         if(!orgs.length){setErr("No companies found in Apollo for those criteria. Try broader search terms.");setLoading(false);return;}
-        // Use Claude to add signal context and fit scores for each org
-        const orgList=orgs.map(o=>`${o.name} (${o.industry||"unknown industry"}, ${o.estimated_num_employees||"?"} employees, ${o.primary_domain||"?"})`).join("\n");
+
+        // Build results directly from Apollo data (no parsing needed)
+        // Then ask Claude (no web search) to add signal + fit reason per company
+        const orgNames=orgs.map(o=>o.name).join(", ");
         const prompt=`You are a B2B sales researcher for Evolve ESolutions (IT/HR/Healthcare/Legal/Financial Services recruitment, Pleasanton CA).
-These companies were found in a verified database. Research each and add a recent buying signal and fit assessment.
-Target criteria: ${target} | Signal type: ${sig}
+Add a recent buying signal and fit assessment for each of these verified companies:
+${orgNames}
 
-Companies:
-${orgList}
+Target: ${target} | Signal type: ${sig}
+Rules:
+- One entry per company, exactly as named above
+- signal: most recent known hiring/growth/funding news with month+year if known
+- fitScore: 60-95
+- Output ONLY valid JSON array, no markdown, no explanation
 
-For each company, output ONLY a raw JSON array:
-[{"name":"exact name from list","industry":"","size":"","location":"","website":"primary domain","signal":"specific recent signal with month+year or best known recent news","fitScore":75,"fitReason":"why Evolve should call them now"}]`;
-        const t=await ai(prompt,true,1000); // web search ON to find signals
-        const strategies=[()=>JSON.parse(t.trim()),()=>JSON.parse(t.replace(/\`\`\`json\n?/g,"").replace(/\`\`\`\n?/g,"").trim()),()=>{const m=t.match(/\[[\s\S]*?\]/);return m?JSON.parse(m[0]):null;},()=>{const m=t.match(/\[\s*\{[\s\S]*?\}\s*\]/);return m?JSON.parse(m[0]):null;}];
-        let parsed=null;for(const fn of strategies){try{const r=fn();if(Array.isArray(r)&&r.length){parsed=r;break;}}catch{}}
-        // Merge with Apollo data for verified domains
-        if(parsed){parsed=parsed.map(p=>{const org=orgs.find(o=>o.name===p.name);return{...p,website:org?.primary_domain||p.website||"",size:org?.estimated_num_employees?`${org.estimated_num_employees} employees`:p.size,location:org?.city&&org?.state?`${org.city}, ${org.state}`:p.location};})}
+[{"name":"","signal":"","fitScore":80,"fitReason":""}]`;
+        const t=await ai(prompt,false,800); // no web search — avoids rate limit, simpler response
+        // Extract JSON — multiple strategies
+        let signals={};
+        try{
+          const clean=t.replace(/```json
+?/g,"").replace(/```
+?/g,"").trim();
+          const arr=JSON.parse(clean.match(/\[[\s\S]*\]/)?.[0]||clean);
+          if(Array.isArray(arr))arr.forEach(a=>{if(a.name)signals[a.name]={signal:a.signal||"",fitScore:a.fitScore||75,fitReason:a.fitReason||""};});
+        }catch{}
+
+        // Build final results from Apollo data + Claude signals
+        const parsed=orgs.map(o=>{
+          const sig2=signals[o.name]||{signal:`${o.industry||searchTerm} company with ${o.estimated_num_employees||"unknown"} employees`,fitScore:72,fitReason:`Verified ${o.industry||searchTerm} company — potential staffing need`};
+          return{
+            name:o.name,
+            industry:o.industry||searchTerm,
+            size:o.estimated_num_employees?`${o.estimated_num_employees} employees`:size||"",
+            location:o.city&&o.state?`${o.city}, ${o.state}`:loc||"",
+            website:o.primary_domain||"",
+            signal:sig2.signal,
+            fitScore:sig2.fitScore,
+            fitReason:sig2.fitReason,
+          };
+        }).filter(o=>o.website); // must have a real domain from Apollo
+        if(!parsed.length){setErr("Apollo returned companies but none had verified domains. Try different criteria.");setLoading(false);return;}
         saveResults(parsed,`Apollo: ${searchTerm}`);
       }
 
