@@ -822,6 +822,21 @@ function Discover({leads,onSave,onBatchSave,onEnrich,onOutreach,cu,niches:dynNic
     const existingNames=leads.map(l=>l.name).filter(Boolean);
     const excludeClause=existingNames.length>0?`\nEXCLUDE these companies (already in our leads): ${existingNames.join(", ")}`:""
 
+    // ── Helper: robust JSON extraction from any Claude response ──
+    function extractJSON(text){
+      if(!text)return null;
+      const t=text.trim();
+      // 1. Direct parse
+      try{const r=JSON.parse(t);if(Array.isArray(r)&&r.length)return r;}catch{}
+      // 2. Find outermost [ ... ]
+      const start=t.indexOf("[");const end=t.lastIndexOf("]");
+      if(start>-1&&end>start){try{const r=JSON.parse(t.substring(start,end+1));if(Array.isArray(r)&&r.length)return r;}catch{}}
+      // 3. Regex for array with objects inside
+      const m=t.match(/\[[\s\S]*?\{[\s\S]*?\}[\s\S]*?\]/);
+      if(m){try{const r=JSON.parse(m[0]);if(Array.isArray(r)&&r.length)return r;}catch{}}
+      return null;
+    }
+
     // ── Helper: save results ──
     function saveResults(parsed,label){
       if(!parsed?.length){setErr("Could not parse results. Try again.");setLoading(false);return;}
@@ -852,8 +867,7 @@ Rules:
 
 [{"name":"","industry":"","size":"","location":"","website":"company.com","signal":"what happened + Month YYYY","fitScore":82,"fitReason":"why Evolve should call them now"}]`;
         const t=await ai(prompt,false,800);
-        const strategies=[()=>JSON.parse(t.trim()),()=>JSON.parse(t.split("```json").join("").split("```").join("").trim()),()=>{const m=t.match(/\[[\s\S]*?\]/);return m?JSON.parse(m[0]):null;},()=>{const m=t.match(/\[\s*\{[\s\S]*?\}\s*\]/);return m?JSON.parse(m[0]):null;}];
-        let parsed=null;for(const fn of strategies){try{const r=fn();if(Array.isArray(r)&&r.length){parsed=r;break;}}catch{}}
+        const parsed=extractJSON(t);
         saveResults(parsed);
       }
 
@@ -872,8 +886,7 @@ Rules:
 
 [{"name":"","industry":"","size":"","location":"","website":"company.com","signal":"what happened + Month YYYY","fitScore":82,"fitReason":"why Evolve should call them now"}]`;
         const t=await ai(prompt,true,1200); // web search ON
-        const strategies=[()=>JSON.parse(t.trim()),()=>JSON.parse(t.split("```json").join("").split("```").join("").trim()),()=>{const m=t.match(/\[[\s\S]*?\]/);return m?JSON.parse(m[0]):null;},()=>{const m=t.match(/\[\s*\{[\s\S]*?\}\s*\]/);return m?JSON.parse(m[0]):null;}];
-        let parsed=null;for(const fn of strategies){try{const r=fn();if(Array.isArray(r)&&r.length){parsed=r;break;}}catch{}}
+        const parsed=extractJSON(t);
         saveResults(parsed);
       }
 
@@ -937,30 +950,41 @@ Rules:
         if(!serpKey){setErr("Add SerpAPI key in Settings → Discover Enhancement to use SerpAPI search.");setLoading(false);return;}
         const searchTerm=mode==="industry"?industry:`${selectedNiche.label}${subNiche?` ${subNiche}`:""}`;
         const sig2=sigs.length?sigs.join(" OR "):"hiring OR funded OR expanding";
-        const query=`${searchTerm} company ${sig2} ${loc||""} ${size||""} site:linkedin.com OR site:crunchbase.com OR site:techcrunch.com 2025`;
+        const query=`${searchTerm} company ${sig2} ${loc?loc+", United States":"United States"} site:techcrunch.com OR site:crunchbase.com OR site:businesswire.com 2025`;
         const r=await fetch("/api/serp",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query,apiKey:serpKey,num:8})});
         const serpData=await r.json();
         if(!r.ok){setErr(`SerpAPI error: ${serpData.error}`);setLoading(false);return;}
-        const snippets=(serpData.organic||[]).map(o=>`${o.title}: ${o.snippet} [${o.domain}]`).join("\n");
+        const snippets=(serpData.organic||[]).map(o=>`- ${o.title}: ${o.snippet} (${o.domain})`).join("\n");
         if(!snippets){setErr("No results found from SerpAPI. Try different search terms.");setLoading(false);return;}
-        // Claude extracts companies from real search results
+        // Claude extracts companies — explicitly no markdown
         const prompt=`You are a B2B sales researcher for Evolve ESolutions (IT/HR/Healthcare/Legal/Financial Services recruitment, Pleasanton CA).
 
-Extract and qualify companies from these REAL Google search results:
+Extract real companies from these Google search results:
 ${snippets}
 
-Target: ${target} | Signal: ${sig} | Location: ${loc||"any"} | Size: ${size||"any"}${excludeClause}
+Target: ${target} | Signal type: ${sig} | Location: ${loc||"USA"} | Size: ${size||"any"}${excludeClause}
 
-Rules:
-- Only extract companies clearly visible in the search results above
-- Each must have a genuine verifiable signal from the search results
-- Only include if you can confirm the website domain from the results
-- Output ONLY a raw JSON array
+IMPORTANT: Return ONLY a JSON array. No markdown. No code blocks. No explanation. Start your response with [ and end with ].
 
-[{"name":"","industry":"","size":"","location":"","website":"company.com","signal":"specific signal from search results + Month YYYY","fitScore":80,"fitReason":"why Evolve should call them now"}]`;
+[{"name":"Company Name","industry":"","size":"","location":"City, State","website":"domain.com","signal":"specific signal with Month YYYY","fitScore":82,"fitReason":"one sentence why Evolve should call them"}]`;
         const t=await ai(prompt,false,1000);
-        const strategies=[()=>JSON.parse(t.trim()),()=>JSON.parse(t.split("```json").join("").split("```").join("").trim()),()=>{const m=t.match(/\[[\s\S]*?\]/);return m?JSON.parse(m[0]):null;},()=>{const m=t.match(/\[\s*\{[\s\S]*?\}\s*\]/);return m?JSON.parse(m[0]):null;}];
-        let parsed=null;for(const fn of strategies){try{const r=fn();if(Array.isArray(r)&&r.length){parsed=r;break;}}catch{}}
+        // Robust extraction — find [ ... ] block anywhere in response
+        let parsed=null;
+        try{
+          const clean=t.trim();
+          // Try direct parse first
+          if(clean.startsWith("["))parsed=JSON.parse(clean);
+        }catch{}
+        if(!parsed){
+          // Find JSON array anywhere in response (handles markdown wrapping)
+          const match=t.match(/\[[\s\S]*?\{[\s\S]*?\}[\s\S]*?\]/);
+          if(match){try{parsed=JSON.parse(match[0]);}catch{}}
+        }
+        if(!parsed){
+          // Last resort: find anything between outermost [ and ]
+          const start=t.indexOf("[");const end=t.lastIndexOf("]");
+          if(start>-1&&end>start){try{parsed=JSON.parse(t.substring(start,end+1));}catch{}}
+        }
         saveResults(parsed,`SerpAPI: ${searchTerm}`);
       }
 
