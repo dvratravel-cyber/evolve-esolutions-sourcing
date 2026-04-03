@@ -416,7 +416,7 @@ function LogPanel({log=[],isOwner=false,isAdmin=false}){
 function InstantlyTags({user}){
   const [copied,setCopied]=useState("");
   const sig=`${user.displayName}\n${user.title||"Account Manager"}\nEvolve ESolutions\n${user.email||""} | ${user.phone||""}\nevolveesolutions.com`;
-  const tags=[{key:"{{sender_name}}",val:user.displayName,lbl:"Sender name"},{key:"{{signature}}",val:sig,lbl:"Full signature"}];
+  const tags=[{key:"{{firstName}}",val:"[Lead first name]",lbl:"Lead first name"},{key:"{{accountSignature}}",val:"[Mailbox signature]",lbl:"Mailbox signature"}];
   function cp(val,k){navigator.clipboard.writeText(val);setCopied(k);setTimeout(()=>setCopied(""),2000);}
   return(
     <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4 mb-5">
@@ -1302,13 +1302,13 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
   const iMap={"Technology / SaaS":"IT/software","Financial Services":"finance/compliance","Healthcare":"healthcare/clinical","Legal":"legal/paralegal","Manufacturing":"engineering/ops","E-commerce / Retail":"tech/ops","Construction":"project management","Professional Services":"professional/admin","Media & Marketing":"creative/marketing","Logistics & Supply Chain":"ops/tech"};
   const spec=iMap[company.industry]||company.industry;
   // Emails use Instantly merge tags — sender name and signature injected per mailbox
-  const placeholderSig="{{sender_name}}\nEvolve ESolutions\n{{signature}}";
+  const placeholderSig="{{accountSignature}}";
   const prompts={
-    intro:`Write a cold intro email from Evolve ESolutions to a decision-maker at ${company.name}.\n${E}\nTarget: ${company.name}, ${company.industry}, ${company.size}, ${company.location}. Signal: ${company.signal}. Why: ${company.fitReason}\nHook on signal. One sentence on Evolve+${spec}. 24–48hr+passive talent pitch. Specific day CTA. Under 120 words body. Professional, human tone.\nSubject: [under 8 words, no "Introducing"]\n\n[email body]\n\n${placeholderSig}`,
-    followup:`Write a follow-up email from Evolve ESolutions to ${company.name} — no reply received.\n${E}\nSignal: ${company.signal}. Acknowledge they are busy. Lead with different value (no-fee model). Mention recent ${spec} placements. Soft CTA. Under 80 words.\nSubject: [subject]\n\n[email body]\n\n${placeholderSig}`,
-    casestudy:`Write a case study email from Evolve ESolutions to ${company.name}.\n${E}\nSignal: ${company.signal}. Include a mini case study: similar company, similar role, 24-48hr timeline, outcome. Connect directly to ${company.name}'s situation. Under 110 words. CTA: happy to share more.\nSubject: [subject]\n\n[email body]\n\n${placeholderSig}`,
-    value:`Write a value-add email from Evolve ESolutions to ${company.name} — asking for nothing.\n${E}\nSignal: ${company.signal}. Share a genuine hiring trend insight for ${spec}. Position as a knowledgeable partner. Soft close. Under 100 words.\nSubject: [subject]\n\n[email body]\n\n${placeholderSig}`,
-    breakup:`Write a break-up email from Evolve ESolutions to ${company.name}. Acknowledge it's one-sided. Leave the door open. One final value line. Under 70 words. The best break-up emails always get replies.\nSubject: [subject]\n\n[email body]\n\n${placeholderSig}`,
+    intro:`Write a cold intro email from Evolve ESolutions to a decision-maker at ${company.name}.\n${E}\nTarget: ${company.name}, ${company.industry}, ${company.size}, ${company.location}. Signal: ${company.signal}. Why: ${company.fitReason}\nStart the email body with "Hi {{firstName}}," on the first line. Hook on signal. One sentence on Evolve+${spec}. 24–48hr+passive talent pitch. Specific day CTA. Under 120 words body. Professional, human tone.\nSubject: [under 8 words, no "Introducing"]\n\nHi {{firstName}},\n\n[email body]\n\n${placeholderSig}`,
+    followup:`Write a follow-up email from Evolve ESolutions to ${company.name} — no reply received.\n${E}\nSignal: ${company.signal}. Acknowledge they are busy. Lead with different value (no-fee model). Mention recent ${spec} placements. Soft CTA. Under 80 words.\nStart with "Hi {{firstName}}," — do not repeat it in the body.\nSubject: [subject]\n\nHi {{firstName}},\n\n[email body]\n\n${placeholderSig}`,
+    casestudy:`Write a case study email from Evolve ESolutions to ${company.name}.\n${E}\nSignal: ${company.signal}. Include a mini case study: similar company, similar role, 24-48hr timeline, outcome. Connect directly to ${company.name}'s situation. Under 110 words. CTA: happy to share more.\nStart with "Hi {{firstName}}," — do not repeat it in the body.\nSubject: [subject]\n\nHi {{firstName}},\n\n[email body]\n\n${placeholderSig}`,
+    value:`Write a value-add email from Evolve ESolutions to ${company.name} — asking for nothing.\n${E}\nSignal: ${company.signal}. Share a genuine hiring trend insight for ${spec}. Position as a knowledgeable partner. Soft close. Under 100 words.\nStart with "Hi {{firstName}}," — do not repeat it in the body.\nSubject: [subject]\n\nHi {{firstName}},\n\n[email body]\n\n${placeholderSig}`,
+    breakup:`Write a break-up email from Evolve ESolutions to ${company.name}. Acknowledge it's one-sided. Leave the door open. One final value line. Under 70 words. The best break-up emails always get replies.\nStart with "Hi {{firstName}}," — do not repeat it in the body.\nSubject: [subject]\n\nHi {{firstName}},\n\n[email body]\n\n${placeholderSig}`,
   };
   async function generateAll(){
     // Generate all email steps sequentially — shows each one as it generates
