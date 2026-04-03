@@ -376,6 +376,16 @@ async function ai(prompt,search=false,maxTokens=1024){
   // Extract all text blocks (web search may interleave tool_use and text blocks)
   return d.content?.filter(b=>b.type==="text").map(b=>b.text).join("")||"";
 }
+// ── Claude AI with custom messages (supports assistant pre-fill to force JSON) ──
+async function aiMessages(messages,maxTokens=600){
+  const headers={"Content-Type":"application/json","anthropic-dangerous-direct-browser-access":"true"};
+  if(_anthropicKey){headers["x-api-key"]=_anthropicKey;headers["anthropic-version"]="2023-06-01";}
+  const body={model:"claude-sonnet-4-5",max_tokens:maxTokens,messages};
+  const r=await fetch(ANTHROPIC_API,{method:"POST",headers,body:JSON.stringify(body)});
+  const d=await r.json();
+  if(d.error)throw new Error(d.error.message||"API error");
+  return d.content?.filter(b=>b.type==="text").map(b=>b.text).join("")||"";
+}
 
 // ── ElevenLabs ──
 async function tts(text,key,voice="pNInz6obpgDQGcFmaJgB"){
@@ -825,15 +835,22 @@ function Discover({leads,onSave,onBatchSave,onEnrich,onOutreach,cu,niches:dynNic
     // ── Helper: robust JSON extraction from any Claude response ──
     function extractJSON(text){
       if(!text)return null;
-      const t=text.trim();
+      // Strip all markdown fencing first
+      let t=text.replace(/```json/gi,"").replace(/```/g,"").trim();
       // 1. Direct parse
       try{const r=JSON.parse(t);if(Array.isArray(r)&&r.length)return r;}catch{}
-      // 2. Find outermost [ ... ]
+      // 2. Find outermost [ ... ] — handles text before/after JSON
       const start=t.indexOf("[");const end=t.lastIndexOf("]");
-      if(start>-1&&end>start){try{const r=JSON.parse(t.substring(start,end+1));if(Array.isArray(r)&&r.length)return r;}catch{}}
-      // 3. Regex for array with objects inside
-      const m=t.match(/\[[\s\S]*?\{[\s\S]*?\}[\s\S]*?\]/);
-      if(m){try{const r=JSON.parse(m[0]);if(Array.isArray(r)&&r.length)return r;}catch{}}
+      if(start>-1&&end>start){
+        try{const r=JSON.parse(t.substring(start,end+1));if(Array.isArray(r)&&r.length)return r;}catch{}
+      }
+      // 3. Grab individual objects and wrap in array
+      const objects=[];let depth2=0;let objStart=-1;
+      for(let i=0;i<t.length;i++){
+        if(t[i]==="{"){if(depth2===0)objStart=i;depth2++;}
+        if(t[i]==="}"){depth2--;if(depth2===0&&objStart>-1){try{const o=JSON.parse(t.substring(objStart,i+1));if(o.name)objects.push(o);}catch{}objStart=-1;}}
+      }
+      if(objects.length)return objects;
       return null;
     }
 
@@ -957,15 +974,21 @@ Rules:
         // Truncate snippets to keep token count low (max 120 chars each, 5 results)
         const snippets=(serpData.organic||[]).slice(0,5).map(o=>`- ${o.title.substring(0,60)}: ${(o.snippet||"").substring(0,120)} (${o.domain})`).join("\n");
         if(!snippets){setErr("No results found from SerpAPI. Try different search terms.");setLoading(false);return;}
-        // Concise prompt to stay under rate limits
-        const prompt=`B2B researcher for Evolve ESolutions (IT/HR/Healthcare/Legal/Financial Services recruitment).
-Extract companies from these search results. Target: ${target}. Signal: ${sig}. Location: ${loc||"USA"}.${excludeClause}
+        // Minimal prompt to reduce tokens and force JSON output
+        const prompt=`Extract B2B companies from these search results for Evolve ESolutions (IT/HR/Healthcare recruitment).
+Target: ${target}. Location: ${loc||"USA"}.${excludeClause}
 
 ${snippets}
 
-Return ONLY a JSON array, no markdown, start with [:
-[{"name":"","industry":"","size":"","location":"","website":"domain.com","signal":"signal+month+year","fitScore":80,"fitReason":"one sentence"}]`;
-        const t=await ai(prompt,false,600);
+JSON array only (no text before or after):
+[{"name":"X","industry":"","size":"","location":"","website":"x.com","signal":"what + month year","fitScore":75,"fitReason":"why recruit here"}]`;
+        // Use conversation format to force JSON — assistant pre-fill trick
+        const msgs=[
+          {role:"user",content:prompt},
+          {role:"assistant",content:"["}
+        ];
+        const raw=await aiMessages(msgs,400);
+        const t="["+raw; // prepend the [ we pre-filled
         // Robust extraction — find [ ... ] block anywhere in response
         let parsed=null;
         try{
@@ -982,6 +1005,15 @@ Return ONLY a JSON array, no markdown, start with [:
           // Last resort: find anything between outermost [ and ]
           const start=t.indexOf("[");const end=t.lastIndexOf("]");
           if(start>-1&&end>start){try{parsed=JSON.parse(t.substring(start,end+1));}catch{}}
+        }
+        // If Claude fails to return parseable JSON, build results from raw serp data
+        if(!parsed||!parsed.length){
+          const fallback=(serpData.organic||[]).slice(0,3).map(o=>{
+            // Extract domain from link
+            const dom=o.link?new URL(o.link).hostname.replace("www.",""):"";
+            return {name:o.title?.split(/[-|:]/)[0]?.trim()||o.domain,industry:searchTerm,size:"",location:loc||"USA",website:dom,signal:o.snippet?.substring(0,120)||"Found in recent search results",fitScore:70,fitReason:`Matched ${searchTerm} search — verify fit before outreach`};
+          }).filter(o=>o.website&&o.website.includes("."));
+          if(fallback.length){parsed=fallback;console.log("SerpAPI: used fallback from raw results");}
         }
         saveResults(parsed,`SerpAPI: ${searchTerm}`);
       }
