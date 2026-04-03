@@ -8,10 +8,9 @@ export default async function handler(req, res) {
   const { target, body, apiKey } = req.body || {};
   if (!target || !apiKey) return res.status(400).json({ error: 'Missing target or apiKey' });
 
-  // people/match uses POST with query params and no body
-  // other endpoints use POST with JSON body
+  // people/match uses POST with query params — body should be empty
   const isPeopleMatch = target.includes('/people/match');
-  
+
   try {
     const response = await fetch(`https://api.apollo.io${target}`, {
       method: 'POST',
@@ -20,7 +19,9 @@ export default async function handler(req, res) {
         'X-Api-Key': apiKey,
         'Cache-Control': 'no-cache',
       },
-      body: (body && !isPeopleMatch) ? JSON.stringify(body) : undefined,
+      // people/match: no body needed (all params in query string)
+      // api_search & organizations/enrich: send JSON body
+      body: (!isPeopleMatch && body) ? JSON.stringify(body) : undefined,
     });
 
     const text = await response.text();
@@ -32,6 +33,7 @@ export default async function handler(req, res) {
         error: data.message || data.error || data.error_message || `Apollo API error ${response.status}`,
         details: data,
         status: response.status,
+        target,
       });
     }
     return res.status(200).json(data);
