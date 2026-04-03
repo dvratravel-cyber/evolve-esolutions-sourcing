@@ -174,38 +174,60 @@ async function apolloEnrichCompany(domain,apiKey){
 }
 async function apolloFindContacts(domain,apiKey){
   if(!apiKey)throw new Error("No Apollo API key");
-  // Step 1: Search — q_organization_domains MUST be a string (not array) for api_search
+  // Step 1: Search for decision makers at this domain
   const searchRes=await apolloProxy(apiKey,"/api/v1/mixed_people/api_search",{
-    q_organization_domains:domain,
+    q_organization_domains:domain, // must be string, not array
     person_titles:["CEO","Chief Executive Officer","CFO","Chief Financial Officer","COO","Chief Operating Officer","President","Founder","Co-Founder","Managing Director","General Manager","VP Operations","VP Finance","Owner","Director of Operations","Head of Operations"],
     per_page:5,
     page:1,
   });
   const found=(searchRes?.people||[]).slice(0,3);
   if(!found.length)return {people:[]};
-  // Step 2: Enrich each person with people/match to get full name + email
-  // (api_search returns obfuscated last name and no email)
+
+  // Step 2: Enrich each person via people/match (Basic plan: full name + LinkedIn + email)
   const enriched=await Promise.all(found.map(async p=>{
     try{
-      const res=await apolloProxy(apiKey,`/api/v1/people/match?id=${p.id}`);
+      // Basic plan: request work email + personal emails
+      // Phone numbers come back in phone_numbers[] when Apollo has them
+      const res=await apolloProxy(apiKey,`/api/v1/people/match?id=${p.id}&reveal_personal_emails=false`);
       const ep=res?.person||{};
-      const fullName=`${ep.first_name||p.first_name||""} ${ep.last_name||""}`.trim()||p.first_name||"Unknown";
+
+      // Basic plan returns full last_name (not obfuscated)
+      const name=[ep.first_name,ep.last_name].filter(Boolean).join(" ")||ep.name||p.first_name||"Unknown";
+      const title=ep.title||p.title||"";
+      const orgName=ep.organization?.name||"";
+
+      // Basic plan returns linkedin_url directly
+      const linkedin=ep.linkedin_url||(
+        name!=="Unknown"
+          ?`https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(`${name} ${orgName}`.trim())}`
+          :null
+      );
+
+      // Phone: Apollo Basic returns direct numbers when available without waterfall
+      const bestPhone=ep.phone_numbers?.find(n=>n.type==="direct_phone")||
+                      ep.phone_numbers?.find(n=>n.type==="mobile_phone")||
+                      ep.phone_numbers?.[0];
+
       return {
-        name:fullName,
-        title:ep.title||p.title||"",
+        name,title,
         email:ep.email||null,
-        emailType:ep.email?.includes(domain)?"Work":"Personal",
-        phone:ep.phone_numbers?.[0]?.raw_number||null,
-        phoneType:ep.phone_numbers?.[0]?.type||null,
-        linkedin:ep.linkedin_url||null,
+        emailType:ep.email?(ep.email.includes(domain)?"Work":"Personal"):null,
+        phone:bestPhone?.raw_number||bestPhone?.sanitized_number||null,
+        phoneType:bestPhone?.type?.replace(/_/g," ")||null,
+        linkedin,
         source:"Apollo",
       };
-    }catch{
-      // Fallback: use what we got from search (obfuscated name)
+    }catch(e){
+      // Fallback: use search result data only
+      const name=p.first_name||"Unknown";
       return {
-        name:p.first_name||"Unknown",
-        title:p.title||"",
-        email:null,phone:null,phoneType:null,linkedin:null,source:"Apollo",
+        name,title:p.title||"",
+        email:null,phone:null,phoneType:null,
+        linkedin:name!=="Unknown"
+          ?`https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(name)}`
+          :null,
+        source:"Apollo",
       };
     }
   }));
@@ -863,7 +885,7 @@ Rules:
                       <button onClick={()=>onSave(c)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${isSaved(c.name)?"bg-slate-800 text-white border-slate-800":"border-slate-200 text-slate-600 hover:border-slate-400"}`}>
                         {isSaved(c.name)?<><BookmarkCheck size={12}/>Saved</>:<><Bookmark size={12}/>Save</>}
                       </button>
-                      {c.website&&<span className="text-xs text-slate-400 ml-auto">{c.website}</span>}
+                      {c.website&&<a href={`https://${c.website}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline ml-auto"><Globe size={10}/>{c.website}</a>}
                     </div>
                   </div>
                 </div>
@@ -1004,16 +1026,8 @@ Return ONLY valid JSON:
         setErr(`No contacts found on Apollo for domain: ${domain}. Check the domain is correct or try a different company.`);
         setLoading(false);return;
       }
-      const apolloContacts=people.map(p=>({
-        name:`${p.first_name||""} ${p.last_name||""}`.trim()||"Unknown",
-        title:p.title||"",
-        email:p.email||"Not found",
-        emailType:p.email?.includes(domain)?"Work":"Unknown",
-        phone:p.phone_numbers?.[0]?.raw_number||"Not found",
-        phoneType:p.phone_numbers?.[0]?.type||"Not found",
-        linkedin:p.linkedin_url||"",
-        source:"Apollo",
-      }));
+      // apolloFindContacts already returns structured contacts — pass through directly
+      const apolloContacts=people;
       // Merge: keep existing contacts + add Apollo ones, cap at 5
       const existing=(data?.keyContacts||[]).filter(x=>x.source!=="Apollo");
       const combined=[...existing,...apolloContacts].slice(0,5);
@@ -1045,7 +1059,7 @@ Return ONLY valid JSON:
     <div className="max-w-4xl mx-auto px-6 py-8">
       <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-700 mb-5"><ArrowLeft size={14}/>Back</button>
       <div className="flex items-center gap-3 mb-6"><Av name={company.name} idx={idx} lg/><div className="flex-1"><div className="flex items-center gap-2"><h1 className="text-xl font-semibold text-slate-800">{company.name}</h1><Score s={company.fitScore}/></div><p className="text-sm text-slate-500">{company.industry} · {company.size} · {company.location}</p>
-        {company.website?<p className="text-xs text-slate-400 flex items-center gap-1"><Globe size={11}/>{company.website}</p>:<p className="text-xs text-amber-600 flex items-center gap-1">⚠️ No verified website — Apollo enrichment unavailable</p>}
+        {company.website?<a href={`https://${company.website}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"><Globe size={11}/>{company.website}</a>:<span className="text-xs text-amber-600 flex items-center gap-1">⚠️ No verified website — Apollo enrichment unavailable</span>}
         </div><div className="flex gap-2"><button onClick={()=>onOutreach(company)} className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white rounded-xl text-sm font-medium hover:bg-emerald-700"><Mail size={14}/>Outreach</button><button onClick={()=>onSave(company)} className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium border transition-all ${isSaved?"bg-slate-800 text-white border-slate-800":"border-slate-200 text-slate-700 hover:border-slate-400"}`}>{isSaved?<><BookmarkCheck size={14}/>Saved</>:<><Bookmark size={14}/>Save</>}</button></div></div>
       {!data&&!loading&&<div className="bg-white rounded-2xl border border-slate-200 p-10 text-center">
         <TrendingUp size={36} className="text-slate-300 mx-auto mb-3"/>
