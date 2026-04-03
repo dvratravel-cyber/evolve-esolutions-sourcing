@@ -1316,7 +1316,7 @@ Return ONLY valid JSON:
       </div>}
       {loading&&<div className="bg-white rounded-2xl border border-slate-200 p-10 text-center"><Loader2 size={28} className="animate-spin text-violet-500 mx-auto mb-3"/><p className="text-sm text-slate-500 mb-1">Researching {company.name}…</p><p className="text-xs text-slate-400">Classifying contacts — 20–30 seconds.</p></div>}
       {err&&<div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 border border-red-100 rounded-xl px-4 py-3 mb-4"><AlertCircle size={14}/>{err}</div>}
-      {<div className="space-y-4">
+      {data&&<div className="space-y-4">
         <div className={`flex items-center justify-between px-4 py-2.5 rounded-xl border ${cached?"bg-indigo-50 border-indigo-100":"bg-emerald-50 border-emerald-100"}`}>
         <div className="flex items-center gap-2">
           <CheckCircle2 size={14} className={cached?"text-indigo-500":"text-emerald-500"}/>
@@ -1687,7 +1687,7 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
       </div>
 
       {/* Phone */}
-      {<div className="bg-white rounded-2xl border border-slate-200 overflow-hidden mt-6">
+      {phC.length>0&&<div className="bg-white rounded-2xl border border-slate-200 overflow-hidden mt-6">
         <button onClick={()=>setPhOpen(p=>!p)} className="w-full flex items-center justify-between px-5 py-4 hover:bg-slate-50"><div className="flex items-center gap-2"><Phone size={15} className="text-emerald-600"/><span className="text-sm font-semibold text-slate-800">Phone outreach</span><span className="text-xs text-slate-400 ml-1">· {phC.length} contact{phC.length!==1?"s":""}</span></div><svg className={`text-slate-400 transition-transform ${phOpen?"rotate-180":""}`} width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2"><path d="M2 5l5 5 5-5"/></svg></button>
         {phOpen&&<div className="px-5 pb-5 border-t border-slate-100"><p className="text-xs text-slate-500 mt-4 mb-4">Call script, <span className="text-indigo-600 font-medium">ElevenLabs voice note</span>, and SMS follow-up. Voice note auto-generates a script if you haven't yet.</p>
           <div className="space-y-5">{phC.map((c,i)=><div key={i} className="border border-slate-100 rounded-xl overflow-hidden">
