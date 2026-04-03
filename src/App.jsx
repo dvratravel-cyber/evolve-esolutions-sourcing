@@ -852,7 +852,7 @@ Rules:
 
 [{"name":"","industry":"","size":"","location":"","website":"company.com","signal":"what happened + Month YYYY","fitScore":82,"fitReason":"why Evolve should call them now"}]`;
         const t=await ai(prompt,false,800);
-        const strategies=[()=>JSON.parse(t.trim()),()=>JSON.parse(t.replace(/\`\`\`json\n?/g,"").replace(/\`\`\`\n?/g,"").trim()),()=>{const m=t.match(/\[[\s\S]*?\]/);return m?JSON.parse(m[0]):null;},()=>{const m=t.match(/\[\s*\{[\s\S]*?\}\s*\]/);return m?JSON.parse(m[0]):null;}];
+        const strategies=[()=>JSON.parse(t.trim()),()=>JSON.parse(t.split("```json").join("").split("```").join("").trim()),()=>{const m=t.match(/\[[\s\S]*?\]/);return m?JSON.parse(m[0]):null;},()=>{const m=t.match(/\[\s*\{[\s\S]*?\}\s*\]/);return m?JSON.parse(m[0]):null;}];
         let parsed=null;for(const fn of strategies){try{const r=fn();if(Array.isArray(r)&&r.length){parsed=r;break;}}catch{}}
         saveResults(parsed);
       }
@@ -872,7 +872,7 @@ Rules:
 
 [{"name":"","industry":"","size":"","location":"","website":"company.com","signal":"what happened + Month YYYY","fitScore":82,"fitReason":"why Evolve should call them now"}]`;
         const t=await ai(prompt,true,1200); // web search ON
-        const strategies=[()=>JSON.parse(t.trim()),()=>JSON.parse(t.replace(/\`\`\`json\n?/g,"").replace(/\`\`\`\n?/g,"").trim()),()=>{const m=t.match(/\[[\s\S]*?\]/);return m?JSON.parse(m[0]):null;},()=>{const m=t.match(/\[\s*\{[\s\S]*?\}\s*\]/);return m?JSON.parse(m[0]):null;}];
+        const strategies=[()=>JSON.parse(t.trim()),()=>JSON.parse(t.split("```json").join("").split("```").join("").trim()),()=>{const m=t.match(/\[[\s\S]*?\]/);return m?JSON.parse(m[0]):null;},()=>{const m=t.match(/\[\s*\{[\s\S]*?\}\s*\]/);return m?JSON.parse(m[0]):null;}];
         let parsed=null;for(const fn of strategies){try{const r=fn();if(Array.isArray(r)&&r.length){parsed=r;break;}}catch{}}
         saveResults(parsed);
       }
@@ -906,10 +906,9 @@ Rules:
         // Extract JSON — multiple strategies
         let signals={};
         try{
-          const clean=t.replace(/```json
-?/g,"").replace(/```
-?/g,"").trim();
-          const arr=JSON.parse(clean.match(/\[[\s\S]*\]/)?.[0]||clean);
+          const clean=t.split("```json").join("").split("```").join("").trim();
+          const m=clean.match(/\[[\s\S]*\]/);
+          const arr=JSON.parse(m?m[0]:clean);
           if(Array.isArray(arr))arr.forEach(a=>{if(a.name)signals[a.name]={signal:a.signal||"",fitScore:a.fitScore||75,fitReason:a.fitReason||""};});
         }catch{}
 
@@ -960,7 +959,7 @@ Rules:
 
 [{"name":"","industry":"","size":"","location":"","website":"company.com","signal":"specific signal from search results + Month YYYY","fitScore":80,"fitReason":"why Evolve should call them now"}]`;
         const t=await ai(prompt,false,1000);
-        const strategies=[()=>JSON.parse(t.trim()),()=>JSON.parse(t.replace(/\`\`\`json\n?/g,"").replace(/\`\`\`\n?/g,"").trim()),()=>{const m=t.match(/\[[\s\S]*?\]/);return m?JSON.parse(m[0]):null;},()=>{const m=t.match(/\[\s*\{[\s\S]*?\}\s*\]/);return m?JSON.parse(m[0]):null;}];
+        const strategies=[()=>JSON.parse(t.trim()),()=>JSON.parse(t.split("```json").join("").split("```").join("").trim()),()=>{const m=t.match(/\[[\s\S]*?\]/);return m?JSON.parse(m[0]):null;},()=>{const m=t.match(/\[\s*\{[\s\S]*?\}\s*\]/);return m?JSON.parse(m[0]):null;}];
         let parsed=null;for(const fn of strategies){try{const r=fn();if(Array.isArray(r)&&r.length){parsed=r;break;}}catch{}}
         saveResults(parsed,`SerpAPI: ${searchTerm}`);
       }
@@ -1227,7 +1226,7 @@ CRITICAL RULES FOR CONTACTS:
 5. Phone type: "Direct", "Mobile", "Office", or "HQ". Null if no phone found.
 Return ONLY valid JSON:
 {"description":"2-sentence overview","founded":"year","headcount":"estimate","revenue":"estimate or Private","funding":"round or Bootstrapped","recentNews":["3 items with dates"],"techStack":["3-5 tech"],"hiringRoles":["3-4 areas"],"keyContacts":[{"name":"","title":"","email":null,"emailType":null,"phone":null,"phoneType":null,"linkedin":"","source":"AI","emailVerified":false},{"name":"","title":"","email":null,"emailType":null,"phone":null,"phoneType":null,"linkedin":"","source":"AI","emailVerified":false}],"painPoints":["2-3 points"],"approachAngle":"one specific angle for Evolve ESolutions","enrichmentSource":"AI"}`;
-    try{const t=await ai(prompt,false);const clean=t.replace(/```json\n?/g,"").replace(/```\n?/g,"").trim();const m=clean.match(/\{[\s\S]*\}/);if(m){const d=JSON.parse(m[0]);setData(d);await ss(`enr_${slug}`,d);if(sbUrl&&sbKey){sbSaveEnrichment(sbUrl,sbKey,slug,company.name,d);sbSaveContacts(sbUrl,sbKey,company.name,d.keyContacts||[]);}onLogAct(company,`AI enriched by ${cu.displayName}`);}else setErr("Parse failed. Try again.");}catch(e){
+    try{const t=await ai(prompt,false);const clean=t.split("```json").join("").split("```").join("").trim();const m=clean.match(/\{[\s\S]*\}/);if(m){const d=JSON.parse(m[0]);setData(d);await ss(`enr_${slug}`,d);if(sbUrl&&sbKey){sbSaveEnrichment(sbUrl,sbKey,slug,company.name,d);sbSaveContacts(sbUrl,sbKey,company.name,d.keyContacts||[]);}onLogAct(company,`AI enriched by ${cu.displayName}`);}else setErr("Parse failed. Try again.");}catch(e){
       const isRateLimit=e.message?.includes("429")||e.message?.includes("529")||e.message?.toLowerCase().includes("rate")||e.message?.toLowerCase().includes("overload");
       setErr(isRateLimit?`AI rate limit — try again shortly. You can still use "Apollo contacts" button to fetch contacts now without AI.`:`Enrichment failed: ${e.message}`);
     }setLoading(false);
