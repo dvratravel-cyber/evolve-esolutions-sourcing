@@ -39,9 +39,46 @@ const SIZES      = ["Startup (1–50)","SMB (51–250)","Mid-market (251–1000)
 const SIGNALS    = ["Recently funded","Actively posting jobs","Rapid headcount growth","New market expansion","Post-merger integration","Leadership change"];
 const PALETTES   = ["bg-teal-100 text-teal-700","bg-blue-100 text-blue-700","bg-violet-100 text-violet-700","bg-amber-100 text-amber-700","bg-rose-100 text-rose-700","bg-cyan-100 text-cyan-700"];
 const SEQ_TEMPLATES  = [
-  {id:"fast",label:"Fast",days:"10d",steps:[{day:1,type:"email",label:"Cold intro"},{day:3,type:"email",label:"Follow-up"},{day:7,type:"email",label:"Value add"},{day:10,type:"email",label:"Break-up"}]},
-  {id:"standard",label:"Standard",days:"2wk",steps:[{day:1,type:"email",label:"Cold intro"},{day:4,type:"email",label:"Follow-up #1"},{day:8,type:"email",label:"Case study"},{day:11,type:"email",label:"Value add"},{day:14,type:"email",label:"Break-up"}]},
-  {id:"nurture",label:"Nurture",days:"3wk",steps:[{day:1,type:"email",label:"Cold intro"},{day:5,type:"email",label:"Follow-up #1"},{day:10,type:"email",label:"Case study"},{day:14,type:"email",label:"Value add"},{day:18,type:"call",label:"Call attempt"},{day:21,type:"email",label:"Break-up"}]},
+  {id:"fast",label:"Fast",days:"21d",steps:[
+    {day:1, type:"email",label:"Cold intro"},
+    {day:3, type:"email",label:"Follow-up #1"},
+    {day:6, type:"email",label:"Value add - hiring trend"},
+    {day:9, type:"call", label:"Call attempt"},
+    {day:11,type:"email",label:"Case study"},
+    {day:14,type:"email",label:"Follow-up #2"},
+    {day:17,type:"linkedin",label:"LinkedIn connect"},
+    {day:21,type:"email",label:"Break-up"},
+  ]},
+  {id:"standard",label:"Standard",days:"35d",steps:[
+    {day:1, type:"email",   label:"Cold intro"},
+    {day:3, type:"email",   label:"Follow-up #1"},
+    {day:7, type:"email",   label:"Value add - hiring trend"},
+    {day:10,type:"call",    label:"Call attempt"},
+    {day:13,type:"email",   label:"Case study"},
+    {day:16,type:"linkedin",label:"LinkedIn connect"},
+    {day:19,type:"email",   label:"Follow-up #2"},
+    {day:22,type:"email",   label:"Job-specific hook"},
+    {day:26,type:"call",    label:"Call attempt #2"},
+    {day:30,type:"email",   label:"Referral ask"},
+    {day:35,type:"email",   label:"Break-up"},
+  ]},
+  {id:"nurture",label:"Nurture",days:"60d",steps:[
+    {day:1, type:"email",   label:"Cold intro"},
+    {day:3, type:"email",   label:"Follow-up #1"},
+    {day:7, type:"email",   label:"Value add - hiring trend"},
+    {day:10,type:"call",    label:"Call attempt #1"},
+    {day:14,type:"email",   label:"Case study"},
+    {day:18,type:"linkedin",label:"LinkedIn connect"},
+    {day:22,type:"email",   label:"Follow-up #2"},
+    {day:26,type:"email",   label:"Job-specific hook"},
+    {day:30,type:"call",    label:"Call attempt #2"},
+    {day:35,type:"email",   label:"Insight share"},
+    {day:40,type:"email",   label:"Referral ask"},
+    {day:45,type:"linkedin",label:"LinkedIn message"},
+    {day:50,type:"email",   label:"Follow-up #3"},
+    {day:55,type:"call",    label:"Call attempt #3"},
+    {day:60,type:"email",   label:"Break-up"},
+  ]},
 ];
 const EMAIL_TYPES = [["intro","Cold intro"],["followup","Follow-up"],["casestudy","Case study"],["value","Value add"],["breakup","Break-up"]];
 const DEFAULT_ADMIN   = {id:"evadmin",username:"evadmin",password:"evolve2024",displayName:"Admin",title:"Administrator",email:"admin@evolveesolutions.com",phone:"925-252-5700",role:"admin",createdAt:new Date().toISOString()};
@@ -2041,20 +2078,39 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
   const spec=iMap[company.industry]||company.industry;
   // Emails use Instantly merge tags - sender name and signature injected per mailbox
   const placeholderSig="{{accountSignature}}";
+  // Map step labels to prompt types
+  function getStepPromptType(stepLabel){
+    const l=stepLabel.toLowerCase();
+    if(l.includes("cold intro")||l.includes("intro"))return "intro";
+    if(l.includes("follow-up")||l.includes("followup"))return "followup";
+    if(l.includes("case study"))return "casestudy";
+    if(l.includes("value add")||l.includes("insight"))return "value";
+    if(l.includes("break-up")||l.includes("breakup"))return "breakup";
+    if(l.includes("job-specific")||l.includes("job specific"))return "jobhook";
+    if(l.includes("referral"))return "referral";
+    if(l.includes("linkedin"))return "linkedin";
+    if(l.includes("call"))return "callscript";
+    return "followup";
+  }
+
   const prompts={
-    intro:`Write a cold intro email from Evolve ESolutions to a decision-maker at ${company.name}.\n${E}\nTarget: ${company.name}, ${company.industry}, ${company.size}, ${company.location}. Signal: ${company.signal}. Why: ${company.fitReason}\nStart the email body with "Hi {{firstName}}," on the first line. Hook on signal. One sentence on Evolve+${spec}. 24-48hr+passive talent pitch. Specific day CTA. Under 120 words body. Professional, human tone.\nSubject: [under 8 words, no "Introducing"]\n\nHi {{firstName}},\n\n[email body]\n\n${placeholderSig}`,
-    followup:`Write a follow-up email from Evolve ESolutions to ${company.name} - no reply received.\n${E}\nSignal: ${company.signal}. Acknowledge they are busy. Lead with different value (no-fee model). Mention recent ${spec} placements. Soft CTA. Under 80 words.\nStart with "Hi {{firstName}}," - do not repeat it in the body.\nSubject: [subject]\n\nHi {{firstName}},\n\n[email body]\n\n${placeholderSig}`,
-    casestudy:`Write a case study email from Evolve ESolutions to ${company.name}.\n${E}\nSignal: ${company.signal}. Include a mini case study: similar company, similar role, 24-48hr timeline, outcome. Connect directly to ${company.name}'s situation. Under 110 words. CTA: happy to share more.\nStart with "Hi {{firstName}}," - do not repeat it in the body.\nSubject: [subject]\n\nHi {{firstName}},\n\n[email body]\n\n${placeholderSig}`,
-    value:`Write a value-add email from Evolve ESolutions to ${company.name} - asking for nothing.\n${E}\nSignal: ${company.signal}. Share a genuine hiring trend insight for ${spec}. Position as a knowledgeable partner. Soft close. Under 100 words.\nStart with "Hi {{firstName}}," - do not repeat it in the body.\nSubject: [subject]\n\nHi {{firstName}},\n\n[email body]\n\n${placeholderSig}`,
-    breakup:`Write a break-up email from Evolve ESolutions to ${company.name}. Acknowledge it's one-sided. Leave the door open. One final value line. Under 70 words. The best break-up emails always get replies.\nStart with "Hi {{firstName}}," - do not repeat it in the body.\nSubject: [subject]\n\nHi {{firstName}},\n\n[email body]\n\n${placeholderSig}`,
+    intro:`Write a cold intro email from Evolve ESolutions to a decision-maker at ${company.name}.\n${E}\nTarget: ${company.name}, ${company.industry}, ${company.size}, ${company.location}. Signal: ${company.signal}. Why: ${company.fitReason}\nHook on their signal. One sentence on Evolve. 24-48hr passive talent pitch. Specific day CTA. Under 120 words. Professional, human tone.\nSubject: [under 8 words, no Introducing]\n\nHi {{firstName}},\n\n[email body]\n\n${placeholderSig}`,
+    followup:`Write a follow-up email from Evolve ESolutions to ${company.name} - no reply received.\n${E}\nSignal: ${company.signal}. Lead with different value angle (no-fee model). Mention recent ${spec} placements. Soft CTA. Under 80 words.\nSubject: [subject]\n\nHi {{firstName}},\n\n[email body]\n\n${placeholderSig}`,
+    casestudy:`Write a case study email from Evolve ESolutions to ${company.name}.\n${E}\nSignal: ${company.signal}. Include a mini case study: similar ${spec} company, specific role, 24-48hr result. Connect to ${company.name}. Under 110 words. CTA: share more?\nSubject: [subject]\n\nHi {{firstName}},\n\n[email body]\n\n${placeholderSig}`,
+    value:`Write a value-add email from Evolve ESolutions to ${company.name} - no ask.\n${E}\nSignal: ${company.signal}. Share one specific ${spec} hiring trend insight. Position as expert partner. Soft close. Under 100 words.\nSubject: [subject]\n\nHi {{firstName}},\n\n[email body]\n\n${placeholderSig}`,
+    breakup:`Write a break-up email from Evolve ESolutions to ${company.name}. One-sided acknowledgement. Leave door open. One final value line. Under 70 words. Best break-up emails always get replies.\nSubject: [subject]\n\nHi {{firstName}},\n\n[email body]\n\n${placeholderSig}`,
+    jobhook:`Write an email from Evolve ESolutions to ${company.name} using their active job postings as the hook.\n${E}\nSignal: ${company.signal}. Reference a specific role they are hiring for. Show how Evolve delivers passive candidates for exactly this role faster than a job board. Under 110 words.\nSubject: [subject referencing their open role]\n\nHi {{firstName}},\n\n[email body]\n\n${placeholderSig}`,
+    referral:`Write a referral-ask email from Evolve ESolutions to ${company.name}. They have not engaged yet. Ask if they know anyone in their network who might benefit from Evolve's recruitment support. Humble, brief, no pressure. Under 70 words.\nSubject: [subject]\n\nHi {{firstName}},\n\n[email body]\n\n${placeholderSig}`,
+    linkedin:`Write a LinkedIn connection request note from Evolve ESolutions to a contact at ${company.name}. Context: ${company.signal}. Max 300 characters. Warm, peer-to-peer, specific hook, no cliches. Return ONLY the note text, no subject line.`,
+    callscript:`Write a cold call script for Evolve ESolutions calling ${company.name}. ${E}\nSignal: ${company.signal}. Spec: ${spec}. Natural, confident, ready for objections.\n[OPENING - 20 words max]\n[IF ENGAGED - value prop]\n[OBJECTION: PSL - handle politely]\n[CLOSE - specific ask]\n200-250 words total.`,
   };
   async function generateAll(){
-    // Generate all email steps sequentially - shows each one as it generates
-    const emailSteps=tmpl.steps.filter(s=>s.type==="email");
+    // Generate all steps sequentially (email, linkedin, call)
+    const allSteps=tmpl.steps;
     setLoading(true);setIErr("");
-    for(const s of emailSteps){
+    for(const s of allSteps){
       if(generatedSteps[s.label])continue; // skip already generated
-      const t=EMAIL_TYPES.find(e=>s.label.toLowerCase().includes(e[0]))?.[0]||"intro";
+      const t=getStepPromptType(s.label);
       setStep(s);setEType(t);setContent("Generating...");
       try{
         const txt=await ai(prompts[t]||prompts.intro,false,600);
@@ -2255,7 +2311,7 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
                   } else {
                     gen(s,eTypeForStep);
                   }
-                }}><div className="w-7 h-7 rounded-full bg-white border-2 border-slate-200 flex items-center justify-center z-10 flex-shrink-0"><span className="text-xs font-semibold text-slate-500">{i+1}</span></div><div className="flex-1 min-w-0"><div className="text-xs font-medium text-slate-800">{s.label}</div><div className="text-xs text-slate-400">Day {s.day}</div></div><span className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-md font-medium ${s.type==="call"?"bg-amber-100 text-amber-700":"bg-slate-100 text-slate-600"}`}>{s.type==="call"?<Phone size={12}/>:<Mail size={12}/>}{s.type}</span>
+                }}><div className="w-7 h-7 rounded-full bg-white border-2 border-slate-200 flex items-center justify-center z-10 flex-shrink-0"><span className="text-xs font-semibold text-slate-500">{i+1}</span></div><div className="flex-1 min-w-0"><div className="text-xs font-medium text-slate-800">{s.label}</div><div className="text-xs text-slate-400">Day {s.day}</div></div><span className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-md font-medium ${s.type==="call"?"bg-amber-100 text-amber-700":s.type==="linkedin"?"bg-blue-100 text-blue-700":"bg-slate-100 text-slate-600"}`}>{s.type==="call"?<Phone size={12}/>:s.type==="linkedin"?<Linkedin size={12}/>:<Mail size={12}/>}{s.type}</span>
                   {generatedSteps[s.label]&&<span className="text-xs text-emerald-600 font-semibold">✓</span>}</div>)}</div>
             </div>
           </div>
