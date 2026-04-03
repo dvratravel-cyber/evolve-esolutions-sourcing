@@ -1234,6 +1234,36 @@ Return ONLY valid JSON:
   );
 }
 
+// ── Small component: shows how many contacts will be pushed ──
+function ContactPreview({company,settings}){
+  const [preview,setPreview]=useState(null);
+  useEffect(()=>{
+    async function load(){
+      const slug=company.name.toLowerCase().replace(/\s+/g,"_");
+      let enr=await sg(`enr_${slug}`);
+      if((!enr?.keyContacts?.length)&&settings?.supabaseUrl&&settings?.supabaseKey){
+        enr=await sbLoadEnrichment(settings.supabaseUrl,settings.supabaseKey,slug);
+      }
+      const all=(enr?.keyContacts||[]);
+      const valid=all.filter(c=>c.email&&c.email!=="Not found"&&c.email.includes("@"));
+      setPreview({total:all.length,valid:valid.length,emails:valid.map(c=>c.email)});
+    }
+    load();
+  },[company.name]);
+  if(!preview)return null;
+  if(preview.total===0)return(
+    <p className="text-xs text-amber-600 mt-1">⚠️ No contacts found — run Enrich first to get contact emails</p>
+  );
+  return(
+    <div className="mt-1">
+      {preview.valid>0
+        ?<p className="text-xs text-emerald-600">✓ {preview.valid} contact{preview.valid!==1?"s":""} with email ready to push{preview.valid<preview.total?` (${preview.total-preview.valid} skipped, no email)`:""}</p>
+        :<p className="text-xs text-amber-600">⚠️ {preview.total} contact{preview.total!==1?"s":""} found but none have email addresses — edit contacts in Enrich</p>
+      }
+    </div>
+  );
+}
+
 // ══ OUTREACH ══
 function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
   const [tmpl,setTmpl]=useState(SEQ_TEMPLATES[1]);const [step,setStep]=useState(null);const [eType,setEType]=useState("intro");const [content,setContent]=useState("");const [loading,setLoading]=useState(false);const [cp,setCp]=useState(false);
@@ -1332,15 +1362,27 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
     try{
       // Use pre-generated steps from state
       const steps=emailSteps.map(s=>generatedSteps[s.label]).filter(Boolean);
-      const enriched=await sg(`enr_${company.name.toLowerCase().replace(/\s+/g,"_")}`);
-      // Use contacts from localStorage cache (always kept in sync when contacts are added/edited in Enrich)
-      const allContacts=(enriched?.keyContacts||[]).map(c=>({...c,company:company.name}));
-      // Valid email = exists, not null, not placeholder text
-      const contacts=allContacts.filter(c=>c.email&&c.email!=="Not found"&&c.email!==null&&c.email.includes("@"));
+      // Load enrichment — try localStorage first, fall back to Supabase
+      let enriched=await sg(`enr_${company.name.toLowerCase().replace(/\s+/g,"_")}`);
+      if((!enriched?.keyContacts?.length)&&settings?.supabaseUrl&&settings?.supabaseKey){
+        const slug=company.name.toLowerCase().replace(/\s+/g,"_");
+        const sbData=await sbLoadEnrichment(settings.supabaseUrl,settings.supabaseKey,slug);
+        if(sbData?.keyContacts?.length){enriched=sbData;ss(`enr_${slug}`,sbData);} // cache locally too
+      }
+      const allContacts=(enriched?.keyContacts||[]).map(ct=>({...ct,company:company.name}));
+      // Clean legacy "Not found" strings and filter to valid emails only
+      const contacts=allContacts
+        .map(ct=>({...ct,email:(ct.email&&ct.email!=="Not found"&&ct.email.includes("@"))?ct.email:null}))
+        .filter(ct=>ct.email);
       const skipped=allContacts.length-contacts.length;
       setISkipped(skipped);
       setISent(contacts.length);
-      if(!contacts.length){setIErr("No contacts with valid emails found. Add or edit contact emails in the Enrich view first.");setIPushing(false);return;}
+      if(!contacts.length){
+        const reason=allContacts.length===0
+          ?"No contacts found — run AI Enrichment or Apollo first to get contact details."
+          :`${allContacts.length} contact${allContacts.length!==1?"s":""} found but none have verified email addresses. Edit contacts in Enrich to add emails.`;
+        setIErr(reason);setIPushing(false);return;
+      }
       const campaignName=`Evolve — ${company.name} — ${new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`;
       const campaignId=await instantlyCreateCampaign(instantlyKey,campaignName,contacts,steps);
       onLogAct(company,`pushed to Instantly · ${tmpl.label} · ${contacts.length} contact${contacts.length!==1?"s":""} · ID: ${campaignId}`);
@@ -1382,6 +1424,7 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
             <div>
               <p className="text-xs font-semibold text-slate-700">Push full sequence to Instantly</p>
               <p className="text-xs text-slate-500">{(()=>{const total=tmpl.steps.filter(s=>s.type==="email").length;const ready=Object.keys(generatedSteps).length;return ready>=total?`✓ All ${total} steps ready to push`:`${ready}/${total} steps generated — click each step to generate before pushing`;})()}</p>
+              <ContactPreview company={company} settings={settings}/>
             </div>
           )}
           {iErr&&<div className="mt-1">
