@@ -885,7 +885,7 @@ Rules:
 - Output ONLY a raw JSON array
 
 [{"name":"","industry":"","size":"","location":"","website":"company.com","signal":"what happened + Month YYYY","fitScore":82,"fitReason":"why Evolve should call them now"}]`;
-        const t=await ai(prompt,true,1200); // web search ON
+        const t=await ai(prompt,true,800); // web search ON
         const parsed=extractJSON(t);
         saveResults(parsed);
       }
@@ -915,7 +915,7 @@ Rules:
 - Output ONLY valid JSON array, no markdown, no explanation
 
 [{"name":"","signal":"","fitScore":80,"fitReason":""}]`;
-        const t=await ai(prompt,false,800); // no web search — avoids rate limit, simpler response
+        const t=await ai(prompt,false,500); // no web search — short signal summaries only
         // Extract JSON — multiple strategies
         let signals={};
         try{
@@ -951,23 +951,21 @@ Rules:
         const searchTerm=mode==="industry"?industry:`${selectedNiche.label}${subNiche?` ${subNiche}`:""}`;
         const sig2=sigs.length?sigs.join(" OR "):"hiring OR funded OR expanding";
         const query=`${searchTerm} company ${sig2} ${loc?loc+", United States":"United States"} site:techcrunch.com OR site:crunchbase.com OR site:businesswire.com 2025`;
-        const r=await fetch("/api/serp",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query,apiKey:serpKey,num:8})});
+        const r=await fetch("/api/serp",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query,apiKey:serpKey,num:5})});
         const serpData=await r.json();
         if(!r.ok){setErr(`SerpAPI error: ${serpData.error}`);setLoading(false);return;}
-        const snippets=(serpData.organic||[]).map(o=>`- ${o.title}: ${o.snippet} (${o.domain})`).join("\n");
+        // Truncate snippets to keep token count low (max 120 chars each, 5 results)
+        const snippets=(serpData.organic||[]).slice(0,5).map(o=>`- ${o.title.substring(0,60)}: ${(o.snippet||"").substring(0,120)} (${o.domain})`).join("\n");
         if(!snippets){setErr("No results found from SerpAPI. Try different search terms.");setLoading(false);return;}
-        // Claude extracts companies — explicitly no markdown
-        const prompt=`You are a B2B sales researcher for Evolve ESolutions (IT/HR/Healthcare/Legal/Financial Services recruitment, Pleasanton CA).
+        // Concise prompt to stay under rate limits
+        const prompt=`B2B researcher for Evolve ESolutions (IT/HR/Healthcare/Legal/Financial Services recruitment).
+Extract companies from these search results. Target: ${target}. Signal: ${sig}. Location: ${loc||"USA"}.${excludeClause}
 
-Extract real companies from these Google search results:
 ${snippets}
 
-Target: ${target} | Signal type: ${sig} | Location: ${loc||"USA"} | Size: ${size||"any"}${excludeClause}
-
-IMPORTANT: Return ONLY a JSON array. No markdown. No code blocks. No explanation. Start your response with [ and end with ].
-
-[{"name":"Company Name","industry":"","size":"","location":"City, State","website":"domain.com","signal":"specific signal with Month YYYY","fitScore":82,"fitReason":"one sentence why Evolve should call them"}]`;
-        const t=await ai(prompt,false,1000);
+Return ONLY a JSON array, no markdown, start with [:
+[{"name":"","industry":"","size":"","location":"","website":"domain.com","signal":"signal+month+year","fitScore":80,"fitReason":"one sentence"}]`;
+        const t=await ai(prompt,false,600);
         // Robust extraction — find [ ... ] block anywhere in response
         let parsed=null;
         try{
@@ -988,7 +986,16 @@ IMPORTANT: Return ONLY a JSON array. No markdown. No code blocks. No explanation
         saveResults(parsed,`SerpAPI: ${searchTerm}`);
       }
 
-    }catch(e){setErr(`Search failed: ${e.message||"Check API key in Settings."}`);}
+    }catch(e){
+      const msg=e.message||"";
+      if(msg.includes("credit")||msg.includes("balance")||msg.includes("quota")){
+        setErr("Anthropic API credits exhausted — add credits at console.anthropic.com/billing then try again.");
+      } else if(msg.includes("401")||msg.includes("invalid")||msg.toLowerCase().includes("auth")){
+        setErr("Invalid Anthropic API key — check your key in Settings.");
+      } else {
+        setErr(`Search failed: ${msg||"Check API key in Settings."}`);
+      }
+    }
     setLoading(false);
   }
 
@@ -1251,8 +1258,16 @@ CRITICAL RULES FOR CONTACTS:
 Return ONLY valid JSON:
 {"description":"2-sentence overview","founded":"year","headcount":"estimate","revenue":"estimate or Private","funding":"round or Bootstrapped","recentNews":["3 items with dates"],"techStack":["3-5 tech"],"hiringRoles":["3-4 areas"],"keyContacts":[{"name":"","title":"","email":null,"emailType":null,"phone":null,"phoneType":null,"linkedin":"","source":"AI","emailVerified":false},{"name":"","title":"","email":null,"emailType":null,"phone":null,"phoneType":null,"linkedin":"","source":"AI","emailVerified":false}],"painPoints":["2-3 points"],"approachAngle":"one specific angle for Evolve ESolutions","enrichmentSource":"AI"}`;
     try{const t=await ai(prompt,false);const clean=t.split("```json").join("").split("```").join("").trim();const m=clean.match(/\{[\s\S]*\}/);if(m){const d=JSON.parse(m[0]);setData(d);await ss(`enr_${slug}`,d);if(sbUrl&&sbKey){sbSaveEnrichment(sbUrl,sbKey,slug,company.name,d);sbSaveContacts(sbUrl,sbKey,company.name,d.keyContacts||[]);}onLogAct(company,`AI enriched by ${cu.displayName}`);}else setErr("Parse failed. Try again.");}catch(e){
-      const isRateLimit=e.message?.includes("429")||e.message?.includes("529")||e.message?.toLowerCase().includes("rate")||e.message?.toLowerCase().includes("overload");
-      setErr(isRateLimit?`AI rate limit — try again shortly. You can still use "Apollo contacts" button to fetch contacts now without AI.`:`Enrichment failed: ${e.message}`);
+      const msg=e.message||"";
+      const isRateLimit=msg.includes("429")||msg.includes("529")||msg.toLowerCase().includes("rate")||msg.toLowerCase().includes("overload");
+      const isCredits=msg.includes("credit")||msg.includes("balance")||msg.includes("quota");
+      const isAuth=msg.includes("401")||msg.toLowerCase().includes("invalid")||msg.toLowerCase().includes("auth");
+      setErr(
+        isCredits?"Anthropic API credits exhausted — add credits at console.anthropic.com/billing. You can still use the Apollo contacts button.":
+        isRateLimit?`AI rate limit — try again shortly. You can still use "Apollo contacts" button to fetch contacts now without AI.`:
+        isAuth?"Invalid Anthropic API key — check your key in Settings.":
+        `Enrichment failed: ${msg}`
+      );
     }setLoading(false);
   }
   async function enrichWithApollo(){
