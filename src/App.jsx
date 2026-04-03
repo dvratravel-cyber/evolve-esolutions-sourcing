@@ -4,7 +4,7 @@ import {
   ArrowLeft, Copy, RefreshCw, AlertCircle, Phone, Linkedin,
   TrendingUp, Users, Globe, Zap, CheckCircle2, BarChart2,
   Target, Trash2, FileText, Settings, Download, Play, Square,
-  Key, Database, Mic, LogOut, UserPlus, Shield, User, Eye,
+  Key, Database, Mic, LogOut, UserPlus, Shield, User, Eye, Plus,
   EyeOff, Clock, Activity, ChevronDown, ChevronRight, Tag, X, Pencil, Check, Send
 } from "lucide-react";
 
@@ -22,7 +22,7 @@ const NICHES = [
   {id:"04",label:"Data & Analytics",             subs:["Databricks (Delta Live Tables / Lakehouse)","Snowflake (Cortex / Data Sharing)","dbt (Semantic Layer / dbt Cloud)","Apache Kafka / Flink / Spark","Data Mesh & Data Products","ETL/ELT (Fivetran / Airbyte)","Data Observability (Monte Carlo / Soda)","MLOps & Feature Stores","SQL / Python / Spark"]},
   {id:"05",label:"AI & Emerging Tech",           subs:["LLM Engineering (LangGraph / AutoGen / CrewAI)","RAG Architecture","Vector Databases (Pinecone / pgvector / Weaviate)","MLOps (MLflow / SageMaker / Vertex AI)","Fine-tuning (LoRA / QLoRA / PEFT)","AI Safety & Alignment","GPU Infrastructure & Model Serving","AI Observability (Arize / W&B)","Multimodal AI Engineering"]},
   {id:"06",label:"Software Engineering",         subs:["Backend (Java / Python / Go / Rust / Node.js)","Microservices & Distributed Systems","API Design (REST / GraphQL / gRPC)","Full Stack (React / Vue / Angular)","Domain-Driven Design (DDD)","AI Feature Integration (LLM APIs / RAG)","ERP/CRM (SAP / Salesforce / PeopleSoft)","Test-Driven Development (TDD / BDD)"]},
-  {id:"07",label:"C-Suite & Technical Leadership",subs:["CTO — Chief Technology Officer","CIO — Chief Information Officer","CISO — Chief Information Security Officer","VP Engineering / Head of Engineering","CPO — Chief Product Officer","CDO — Chief Data Officer","Engineering Director / Principal Engineer","Head of Platform / Head of Architecture"]},
+  {id:"07",label:"C-Suite & Technical Leadership",subs:["CTO - Chief Technology Officer","CIO - Chief Information Officer","CISO - Chief Information Security Officer","VP Engineering / Head of Engineering","CPO - Chief Product Officer","CDO - Chief Data Officer","Engineering Director / Principal Engineer","Head of Platform / Head of Architecture"]},
   {id:"08",label:"Fintech & Banking",            subs:["Payments Engineering (Stripe / Adyen / ISO 20022)","Open Banking (PSD2 / FDX / APIs)","Core Banking Modernisation","RegTech & Compliance Engineering","Blockchain & Digital Assets","Risk & Fraud Engineering","Trading Systems & Low Latency","Cloud-Native Banking Infrastructure"]},
   {id:"09",label:"Healthcare & MedTech",         subs:["FHIR / HL7 Integration Engineering","EHR/EMR Systems (Epic / Cerner / Meditech)","Clinical Data Engineering","Medical Device Software (IEC 62304)","HealthTech SaaS Platform Engineering","Digital Health & Telehealth","HIPAA Compliance Engineering","AI in Clinical Decision Support"]},
   {id:"10",label:"BioTech & Life Sciences",      subs:["Bioinformatics Engineering","Genomics & NGS Data Pipelines","Clinical Trial Data Management (CDISC)","Lab Informatics (LIMS / ELN)","Regulatory Affairs Technology","Drug Discovery AI & ML","Cell & Gene Therapy Tech","GxP Compliance & Validation"]},
@@ -47,7 +47,7 @@ const EMAIL_TYPES = [["intro","Cold intro"],["followup","Follow-up"],["casestudy
 const DEFAULT_ADMIN   = {id:"evadmin",username:"evadmin",password:"evolve2024",displayName:"Admin",title:"Administrator",email:"admin@evolveesolutions.com",phone:"925-252-5700",role:"admin",createdAt:new Date().toISOString()};
 
 // ── Storage ──
-// ── Adaptive storage — window.storage in Claude.ai, localStorage on Vercel ──
+// ── Adaptive storage - window.storage in Claude.ai, localStorage on Vercel ──
 async function sg(k){
   try{if(window.storage){const r=await window.storage.get(k);return r?JSON.parse(r.value):null;}}catch{}
   try{const v=localStorage.getItem(k);return v?JSON.parse(v):null;}catch{return null;}
@@ -167,6 +167,28 @@ async function sbSaveOutreach(url,key,leadName,ownerId,ownerName,sequenceType,st
   await sbReq(`${url}/rest/v1/outreach`,key,"POST",record);
 }
 
+// ── Supabase: import_queue helpers ──
+async function sbSaveImportRows(url,key,rows){
+  if(!url||!key||!rows.length)return;
+  // Upsert each row individually (simple, small batches)
+  for(const row of rows){
+    await sbReq(`${url}/rest/v1/import_queue`,key,"POST",row);
+  }
+}
+async function sbLoadImportQueue(url,key){
+  if(!url||!key)return[];
+  const rows=await sbReq(`${url}/rest/v1/import_queue?status=eq.pending&order=created_at.asc&select=*`,key);
+  return rows||[];
+}
+async function sbMarkImportDone(url,key,id){
+  if(!url||!key)return;
+  await sbReq(`${url}/rest/v1/import_queue?id=eq.${id}`,key,"PATCH",{status:"done",processed_at:new Date().toISOString()});
+}
+async function sbDeleteImportRow(url,key,id){
+  if(!url||!key)return;
+  await sbReq(`${url}/rest/v1/import_queue?id=eq.${id}`,key,"DELETE");
+}
+
 // ── Supabase: load outreach history for a lead ──
 async function sbLoadOutreach(url,key,leadName){
   if(!url||!key)return[];
@@ -174,7 +196,7 @@ async function sbLoadOutreach(url,key,leadName){
   return rows||[];
 }
 
-// ── Apollo.io enrichment (via Vercel proxy — Apollo blocks direct browser calls) ──
+// ── Apollo.io enrichment (via Vercel proxy - Apollo blocks direct browser calls) ──
 async function apolloProxy(apiKey,target,body=null){
   const r=await fetch("/api/apollo",{
     method:"POST",
@@ -226,7 +248,7 @@ async function apolloFindContacts(domain,apiKey){
   // Step 2: Enrich each person via people/match (Basic plan: full name + LinkedIn + email)
   const enriched=await Promise.all(found.map(async p=>{
     try{
-      // Cache by Apollo person ID — avoids re-charging credits if same person looked up again
+      // Cache by Apollo person ID - avoids re-charging credits if same person looked up again
       const cacheKey=`apollo_person_${p.id}`;
       let res;
       try{const cached=localStorage.getItem(cacheKey);res=cached?JSON.parse(cached):null;}catch{res=null;}
@@ -292,7 +314,7 @@ function emailToHtml(text){
     .map(para=>`<p>${para.replace(/\n/g,"<br>")}</p>`) // single newlines = <br>
     .join("");
 }
-// NOTE: Requires a v2 API key — Instantly → Settings → API Keys → Create Key (scopes: campaigns:all + leads:all)
+// NOTE: Requires a v2 API key - Instantly → Settings → API Keys → Create Key (scopes: campaigns:all + leads:all)
 async function instantlyProxy(apiKey,target,body,method="POST"){
   const r=await fetch("/api/instantly",{
     method:"POST",
@@ -305,7 +327,7 @@ async function instantlyProxy(apiKey,target,body,method="POST"){
   return d;
 }
 async function instantlyCreateCampaign(apiKey,campaignName,contacts,emailSteps){
-  if(!apiKey)throw new Error("No Instantly v2 API key — generate one at Instantly → Settings → API Keys");
+  if(!apiKey)throw new Error("No Instantly v2 API key - generate one at Instantly → Settings → API Keys");
   if(!emailSteps?.length)throw new Error("No email steps to push");
 
   // Build sequences: delay = days interval between steps (not absolute day)
@@ -332,8 +354,8 @@ async function instantlyCreateCampaign(apiKey,campaignName,contacts,emailSteps){
   const campaignId=camp.id;
   if(!campaignId)throw new Error("Campaign created but no ID returned");
 
-  // Step 2: Add all contacts in ONE bulk call — correct endpoint is /api/v2/leads/add
-  // campaign_id goes at top level, leads is an array — NOT campaign_id inside each lead
+  // Step 2: Add all contacts in ONE bulk call - correct endpoint is /api/v2/leads/add
+  // campaign_id goes at top level, leads is an array - NOT campaign_id inside each lead
   const validContacts=contacts.filter(c=>c.email&&c.email!=="Not found"&&c.email!==null&&c.email.includes("@"));
   let addResult=null;
   if(validContacts.length){
@@ -604,7 +626,7 @@ function NicheIndustryManager({niches,industries,onSaveNiches,onSaveIndustries,s
       {/* Niches tab */}
       {tab==="niches"&&(
         <div className="flex" style={{minHeight:500}}>
-          {/* Left — niche list */}
+          {/* Left - niche list */}
           <div className="w-56 border-r border-slate-100 flex flex-col flex-shrink-0">
             <div className="flex-1 overflow-y-auto">
               {nicheList.map((n,i)=>(
@@ -626,7 +648,7 @@ function NicheIndustryManager({niches,industries,onSaveNiches,onSaveIndustries,s
             </div>
           </div>
 
-          {/* Right — edit selected niche */}
+          {/* Right - edit selected niche */}
           <div className="flex-1 p-5 overflow-y-auto">
             {selected?(
               <>
@@ -673,7 +695,7 @@ function NicheIndustryManager({niches,industries,onSaveNiches,onSaveIndustries,s
 
       {/* Save bar */}
       <div className="border-t border-slate-100 px-5 py-3 bg-slate-50 flex items-center justify-between">
-        <p className="text-xs text-slate-400">{settings?.supabaseUrl?"Changes save to Supabase and apply immediately for all users.":"No Supabase connected — changes save locally only."}</p>
+        <p className="text-xs text-slate-400">{settings?.supabaseUrl?"Changes save to Supabase and apply immediately for all users.":"No Supabase connected - changes save locally only."}</p>
         <button onClick={save} disabled={saving} className="flex items-center gap-2 px-4 py-2 bg-slate-800 text-white rounded-xl text-xs font-medium hover:bg-slate-700 disabled:opacity-60">
           {saving?<><Loader2 size={12} className="animate-spin"/>Saving...</>:saved?<><CheckCircle2 size={12}/>Saved!</>:<>Save changes</>}
         </button>
@@ -701,7 +723,7 @@ function SettingsView({settings,onSave,users,onAdd,onRemove,onPwReset,cu,niches,
   const F=({lbl,k,ph,secret,hint})=><div className="mb-4"><label className="block text-xs font-medium text-slate-500 uppercase tracking-wide mb-1.5">{lbl}</label><input type={secret?"password":"text"} value={f[k]} onChange={e=>setF(p=>({...p,[k]:e.target.value}))} placeholder={ph} className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:border-slate-400 font-mono"/>{hint&&<p className="text-xs text-slate-400 mt-1">{hint}</p>}</div>;
   return(
     <div className="max-w-2xl mx-auto px-6 py-8">
-      <H1 title="Settings" sub="Admin only — API keys, user management, and niche configuration."/>
+      <H1 title="Settings" sub="Admin only - API keys, user management, and niche configuration."/>
 
       {/* Settings tabs */}
       <div className="flex gap-1 mb-6 p-1 bg-slate-100 rounded-xl w-fit">
@@ -717,9 +739,9 @@ function SettingsView({settings,onSave,users,onAdd,onRemove,onPwReset,cu,niches,
             <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-4 flex items-center gap-1.5"><Key size={13}/>API Keys</h3>
             <div className="bg-indigo-50 border border-indigo-100 rounded-xl px-4 py-3 mb-4 flex items-start gap-2">
               <AlertCircle size={13} className="text-indigo-500 mt-0.5 flex-shrink-0"/>
-              <p className="text-xs text-indigo-700">On <span className="font-semibold">Vercel</span>, the Anthropic key is required for AI to work. In <span className="font-semibold">Claude.ai</span>, it's optional — AI runs automatically.</p>
+              <p className="text-xs text-indigo-700">On <span className="font-semibold">Vercel</span>, the Anthropic key is required for AI to work. In <span className="font-semibold">Claude.ai</span>, it's optional - AI runs automatically.</p>
             </div>
-            <F lbl="Anthropic API key" k="anthropicKey" ph="sk-ant-..." secret hint="console.anthropic.com → API Keys — required on Vercel, optional in Claude.ai"/>
+            <F lbl="Anthropic API key" k="anthropicKey" ph="sk-ant-..." secret hint="console.anthropic.com → API Keys - required on Vercel, optional in Claude.ai"/>
             <F lbl="ElevenLabs Voice ID" k="elevenLabsVoiceId" ph="pNInz6obpgDQGcFmaJgB" hint="Default: Adam. Find others at elevenlabs.io/voice-library"/>
             <F lbl="Supabase URL" k="supabaseUrl" ph="https://xxxx.supabase.co"/>
             <F lbl="Supabase anon key" k="supabaseKey" ph="eyJ..." secret/>
@@ -728,15 +750,15 @@ function SettingsView({settings,onSave,users,onAdd,onRemove,onPwReset,cu,niches,
               <p className="text-xs text-amber-700 font-semibold mb-1">⚠️ Instantly requires a v2 API key</p>
               <p className="text-xs text-amber-600">Go to Instantly → Settings → API Keys → Create API Key → select scopes: campaigns:all + leads:all → copy the key below.</p>
             </div>
-            <F lbl="Instantly.ai API key (v2)" k="instantlyV2Key" ph="inst_v2_..." secret hint="Must be a v2 key — v1 keys will return Unauthorized"/>
+            <F lbl="Instantly.ai API key (v2)" k="instantlyV2Key" ph="inst_v2_..." secret hint="Must be a v2 key - v1 keys will return Unauthorized"/>
             <div className="border-t border-slate-100 my-4"/>
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Discover Enhancement</p>
-            <F lbl="SerpAPI key" k="serpKey" ph="..." secret hint="serpapi.com → Dashboard → API Key — enables real Google search results in Discover ($50/mo, 5k searches)"/>
-            <F lbl="Hunter.io API key" k="hunterKey" ph="..." secret hint="hunter.io → API → API Key — verifies contact emails before pushing to Instantly (free 25/mo, $49/mo after)"/>
+            <F lbl="SerpAPI key" k="serpKey" ph="..." secret hint="serpapi.com → Dashboard → API Key - enables real Google search results in Discover ($50/mo, 5k searches)"/>
+            <F lbl="Hunter.io API key" k="hunterKey" ph="..." secret hint="hunter.io → API → API Key - verifies contact emails before pushing to Instantly (free 25/mo, $49/mo after)"/>
             <button onClick={saveKeys} className="w-full py-2.5 rounded-xl bg-slate-800 text-white text-sm font-medium hover:bg-slate-700 flex items-center justify-center gap-2">{saved?<><CheckCircle2 size={14}/>Saved!</>:<><Key size={14}/>Save API keys</>}</button>
           </div>
           <div className="bg-amber-50 border border-amber-100 rounded-2xl p-5">
-            <h3 className="text-xs font-semibold text-amber-700 uppercase tracking-wide mb-3 flex items-center gap-1.5"><Database size={13}/>Supabase — run once in SQL editor</h3>
+            <h3 className="text-xs font-semibold text-amber-700 uppercase tracking-wide mb-3 flex items-center gap-1.5"><Database size={13}/>Supabase - run once in SQL editor</h3>
             <pre className="text-xs text-amber-900 bg-amber-100 rounded-lg p-3 overflow-x-auto whitespace-pre">{`create table if not exists leads (
   id uuid default gen_random_uuid() primary key,
   name text unique not null, owner_id text,
@@ -799,8 +821,216 @@ create table if not exists config (
   );
 }
 
+// ══ IMPORT TAB ══
+function ImportTab({leads,onBatchSave,cu,settings}){
+  const PENDING_KEY="evolve_import_queue_v4";
+  const MAX_PENDING=500;
+  const [rows,setRows]=useState([{name:"",website:"",id:Date.now()}]); // editable table
+  const [queue,setQueue]=useState([]); // persisted pending queue
+  const [processing,setProcessing]=useState(false);
+  const [procMsg,setProcMsg]=useState("");
+  const [err,setErr]=useState("");
+
+  // Load queue from localStorage + Supabase on mount
+  useEffect(()=>{
+    async function load(){
+      const local=JSON.parse(localStorage.getItem(PENDING_KEY)||"[]");
+      if(local.length){setQueue(local);return;}
+      if(settings?.supabaseUrl&&settings?.supabaseKey){
+        const sb=await sbLoadImportQueue(settings.supabaseUrl,settings.supabaseKey);
+        if(sb.length){
+          const mapped=sb.map(r=>({id:r.id,name:r.company_name,website:r.website||"",status:r.status,ownerId:r.owner_id,ownerName:r.owner_name,createdAt:r.created_at}));
+          setQueue(mapped);
+          localStorage.setItem(PENDING_KEY,JSON.stringify(mapped));
+        }
+      }
+    }
+    load();
+  },[]);
+
+  function saveQueue(q){
+    setQueue(q);
+    localStorage.setItem(PENDING_KEY,JSON.stringify(q));
+  }
+
+  function addRow(){setRows(p=>[...p,{name:"",website:"",id:Date.now()}]);}
+  function removeRow(id){setRows(p=>p.filter(r=>r.id!==id));}
+  function updateRow(id,field,val){setRows(p=>p.map(r=>r.id===id?{...r,[field]:val}:r));}
+
+  function parseCSV(text){
+    const lines=text.trim().split(/
+?
+/).filter(Boolean);
+    if(!lines.length)return[];
+    // Detect header row
+    const first=lines[0].toLowerCase();
+    const hasHeader=first.includes("company")||first.includes("name")||first.includes("website");
+    const dataLines=hasHeader?lines.slice(1):lines;
+    return dataLines.map(line=>{
+      const parts=line.split(",").map(p=>p.trim().replace(/^"|"$/g,""));
+      return{name:parts[0]||"",website:parts[1]||"",id:Date.now()+Math.random()};
+    }).filter(r=>r.name);
+  }
+
+  function handleFileUpload(e){
+    const file=e.target.files?.[0];
+    if(!file)return;
+    const reader=new FileReader();
+    reader.onload=ev=>{
+      const parsed=parseCSV(ev.target.result);
+      if(parsed.length){setRows(p=>[...p.filter(r=>r.name),...parsed]);setErr("");}
+      else setErr("Could not parse CSV. Ensure columns are: company_name, website");
+    };
+    reader.readAsText(file);
+    e.target.value="";
+  }
+
+  async function saveToPending(){
+    const valid=rows.filter(r=>r.name.trim());
+    if(!valid.length){setErr("Add at least one company name.");return;}
+    const alreadyInQueue=queue.map(q=>q.name.toLowerCase());
+    const alreadyLead=leads.map(l=>l.name.toLowerCase());
+    const fresh=valid.filter(r=>!alreadyInQueue.includes(r.name.trim().toLowerCase())&&!alreadyLead.includes(r.name.trim().toLowerCase()));
+    if(!fresh.length){setErr("All companies already exist in your queue or leads.");return;}
+    if(queue.length+fresh.length>MAX_PENDING){setErr(`Queue would exceed ${MAX_PENDING} max. Remove some first.`);return;}
+    const newItems=fresh.map(r=>({
+      id:`local_${Date.now()}_${Math.random()}`,
+      name:r.name.trim(),
+      website:(r.website||"").trim().replace(/https?:\/\//,"").replace(/^www\./,"").replace(/\/.*/,"").toLowerCase().trim(),
+      status:"pending",ownerId:cu.username,ownerName:cu.displayName,
+      createdAt:new Date().toISOString(),
+    }));
+    const newQ=[...queue,...newItems];
+    saveQueue(newQ);
+    // Save to Supabase
+    if(settings?.supabaseUrl&&settings?.supabaseKey){
+      await sbSaveImportRows(settings.supabaseUrl,settings.supabaseKey,newItems.map(r=>({company_name:r.name,website:r.website,status:"pending",owner_id:r.ownerId,owner_name:r.ownerName})));
+    }
+    setRows([{name:"",website:"",id:Date.now()}]);
+    setErr("");
+    setProcMsg(`Added ${newItems.length} companies added to pending queue.`);
+    setTimeout(()=>setProcMsg(""),3000);
+  }
+
+  async function processNext(n=2){
+    const pending=queue.filter(r=>r.status==="pending").slice(0,n);
+    if(!pending.length){setErr("No pending companies to process.");return;}
+    setProcessing(true);setProcMsg(`Processing ${pending.length} companies...`);setErr("");
+    const newLeads=[];
+    for(const row of pending){
+      const lead={
+        name:row.name,industry:"",size:"",location:"",website:row.website||"",
+        signal:"Imported company - run Enrich for details",fitScore:70,fitReason:"Imported lead",
+        source:{channel:"Import",method:"CSV",label:""},stage:"new",
+      };
+      newLeads.push(lead);
+      // Mark done in queue
+      const updated=queue.map(q=>q.id===row.id?{...q,status:"done"}:q);
+      saveQueue(updated);
+      if(settings?.supabaseUrl&&settings?.supabaseKey){
+        await sbMarkImportDone(settings.supabaseUrl,settings.supabaseKey,row.id);
+      }
+    }
+    onBatchSave(newLeads);
+    setProcessing(false);
+    setProcMsg(`${pending.length} companies converted to leads! Find them in All Leads > New.`);
+    setTimeout(()=>setProcMsg(""),5000);
+  }
+
+  function removeFromQueue(id){
+    const updated=queue.filter(q=>q.id!==id);
+    saveQueue(updated);
+    if(settings?.supabaseUrl&&settings?.supabaseKey) sbDeleteImportRow(settings.supabaseUrl,settings.supabaseKey,id);
+  }
+
+  const pendingCount=queue.filter(r=>r.status==="pending").length;
+
+  return(
+    <div className="space-y-5">
+      {/* Entry table */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-5">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h3 className="text-sm font-semibold text-slate-800">Add companies</h3>
+            <p className="text-xs text-slate-500 mt-0.5">Type manually or upload a CSV. Columns: company_name, website (optional)</p>
+          </div>
+          <label className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 rounded-lg text-xs font-medium text-slate-600 hover:border-slate-400 cursor-pointer">
+            <Download size={11}/>Upload CSV
+            <input type="file" accept=".csv,.txt" onChange={handleFileUpload} className="hidden"/>
+          </label>
+        </div>
+        {/* Table */}
+        <div className="rounded-xl border border-slate-200 overflow-hidden mb-3">
+          <table className="w-full text-xs">
+            <thead className="bg-slate-50 border-b border-slate-200">
+              <tr><th className="px-3 py-2 text-left text-slate-500 font-medium w-8">#</th><th className="px-3 py-2 text-left text-slate-500 font-medium">Company name *</th><th className="px-3 py-2 text-left text-slate-500 font-medium">Website</th><th className="px-2 py-2 w-8"></th></tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {rows.map((row,i)=>(
+                <tr key={row.id} className="hover:bg-slate-50">
+                  <td className="px-3 py-1.5 text-slate-400">{i+1}</td>
+                  <td className="px-3 py-1.5"><input value={row.name} onChange={e=>updateRow(row.id,"name",e.target.value)} placeholder="Acme Corp" className="w-full bg-transparent outline-none text-slate-800 placeholder-slate-300"/></td>
+                  <td className="px-3 py-1.5"><input value={row.website} onChange={e=>updateRow(row.id,"website",e.target.value)} placeholder="acme.com" className="w-full bg-transparent outline-none text-slate-600 placeholder-slate-300"/></td>
+                  <td className="px-2 py-1.5"><button onClick={()=>removeRow(row.id)} className="text-slate-300 hover:text-red-400"><X size={12}/></button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="flex items-center gap-3">
+          <button onClick={addRow} className="flex items-center gap-1.5 text-xs text-slate-600 px-3 py-1.5 border border-slate-200 rounded-lg hover:border-slate-400"><Plus size={11}/>Add row</button>
+          <button onClick={saveToPending} className="flex items-center gap-1.5 text-xs bg-slate-800 text-white px-3 py-1.5 rounded-lg hover:bg-slate-700"><Download size={11}/>Save to pending queue</button>
+          <span className="text-xs text-slate-400 ml-auto">{rows.filter(r=>r.name.trim()).length} valid rows</span>
+        </div>
+        {err&&<p className="text-xs text-red-500 mt-2">{err}</p>}
+        {procMsg&&<p className="text-xs text-emerald-600 mt-2">{procMsg}</p>}
+      </div>
+
+      {/* Pending queue */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-5">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h3 className="text-sm font-semibold text-slate-800">Pending queue <span className="ml-1 text-xs text-slate-400">{pendingCount} / {MAX_PENDING}</span></h3>
+            <p className="text-xs text-slate-500 mt-0.5">Click "Process next 2" to convert companies to leads. Enrich them one-by-one from the lead detail.</p>
+          </div>
+          <button onClick={()=>processNext(2)} disabled={processing||!pendingCount} className="flex items-center gap-1.5 px-4 py-2 bg-violet-600 text-white rounded-xl text-xs font-medium hover:bg-violet-700 disabled:opacity-50">
+            {processing?<><Loader2 size={11} className="animate-spin"/>Processing...</>:<><Zap size={11}/>Process next 2</>}
+          </button>
+        </div>
+        {queue.length===0?(
+          <p className="text-xs text-slate-400 text-center py-6">No companies in queue. Add companies above and save to pending.</p>
+        ):(
+          <div className="rounded-xl border border-slate-200 overflow-hidden">
+            <table className="w-full text-xs">
+              <thead className="bg-slate-50 border-b border-slate-200">
+                <tr><th className="px-3 py-2 text-left text-slate-500 font-medium">Company</th><th className="px-3 py-2 text-left text-slate-500 font-medium">Website</th><th className="px-3 py-2 text-left text-slate-500 font-medium">Added by</th><th className="px-3 py-2 text-left text-slate-500 font-medium">Status</th><th className="px-2 py-2 w-8"></th></tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {queue.slice(0,50).map((row,i)=>(
+                  <tr key={row.id||i} className={`hover:bg-slate-50 ${row.status==="done"?"opacity-50":""}`}>
+                    <td className="px-3 py-2 font-medium text-slate-800">{row.name}</td>
+                    <td className="px-3 py-2 text-slate-500">{row.website||"—"}</td>
+                    <td className="px-3 py-2 text-slate-400">{row.ownerName||row.ownerId||"—"}</td>
+                    <td className="px-3 py-2">
+                      {row.status==="pending"&&<span className="inline-flex items-center gap-1 text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">⏳ Pending</span>}
+                      {row.status==="done"&&<span className="inline-flex items-center gap-1 text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">✓ Converted</span>}
+                      {row.status==="error"&&<span className="inline-flex items-center gap-1 text-red-500 bg-red-50 px-2 py-0.5 rounded-full">✗ Error</span>}
+                    </td>
+                    <td className="px-2 py-2"><button onClick={()=>removeFromQueue(row.id)} className="text-slate-300 hover:text-red-400"><X size={11}/></button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {queue.length>50&&<p className="text-xs text-slate-400 text-center py-2">Showing first 50 of {queue.length}</p>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ══ DISCOVER ══
-function Discover({leads,onSave,onBatchSave,onEnrich,onOutreach,cu,niches:dynNiches,industries:dynIndustries}){
+function Discover({leads,onSave,onBatchSave,onEnrich,onOutreach,cu,niches:dynNiches,industries:dynIndustries,settings}){
   const nicheList=dynNiches||NICHES;
   const industryList=dynIndustries||INDUSTRIES;
   const [mode,setMode]=useState("industry");
@@ -813,16 +1043,16 @@ function Discover({leads,onSave,onBatchSave,onEnrich,onOutreach,cu,niches:dynNic
   const selectedNiche=nicheList.find(n=>n.id===niche);
   function togSig(s){setSigs(p=>p.includes(s)?p.filter(x=>x!==s):[...p,s]);}
   function isSaved(n){return leads.some(l=>l.name===n);}
-  function switchMode(m){setMode(m);setIndustry("");setNiche("");setSubNiche("");setResults([]);setErr("");}
+  function switchMode(m){setMode(m);setIndustry("");setNiche("");setSubNiche("");setResults([]);setErr("");setSrc("ai");}
 
   const searchLabel = mode==="industry"
     ? industry
-    : selectedNiche ? `${selectedNiche.label}${subNiche?` — ${subNiche}`:""}` : "";
+    : selectedNiche ? `${selectedNiche.label}${subNiche?` - ${subNiche}`:""}` : "";
 
-  const canSearch = mode==="industry" ? !!industry : !!niche;
+  const canSearch = mode==="industry" ? !!industry : mode==="niche" ? !!niche : false;
 
   // Companies to never include regardless of search mode
-  const EXCLUDE_RULE="NEVER include: job boards (Indeed, LinkedIn, Glassdoor, ZipRecruiter, Monster, Reed, Totaljobs), recruitment agencies, staffing firms, RPO providers, headhunters, talent acquisition firms, HR outsourcing companies, or any business whose primary service is recruiting/hiring for other companies. Evolve ESolutions IS a recruitment firm — exclude all competitors.";
+  const EXCLUDE_RULE="NEVER include: job boards (Indeed, LinkedIn, Glassdoor, ZipRecruiter, Monster, Reed, Totaljobs), recruitment agencies, staffing firms, RPO providers, headhunters, talent acquisition firms, HR outsourcing companies, or any business whose primary service is recruiting/hiring for other companies. Evolve ESolutions IS a recruitment firm - exclude all competitors.";
   const EXCLUDE_INDUSTRIES=["staffing","recruiting","human resources outsourcing","rpo","employment agency","headhunting","talent acquisition"];
   function isExcludedCompany(r){
     const name=(r.name||"").toLowerCase();
@@ -853,7 +1083,7 @@ function Discover({leads,onSave,onBatchSave,onEnrich,onOutreach,cu,niches:dynNic
       let t=text.replace(/```json/gi,"").replace(/```/g,"").trim();
       // 1. Direct parse
       try{const r=JSON.parse(t);if(Array.isArray(r)&&r.length)return r;}catch{}
-      // 2. Find outermost [ ... ] — handles text before/after JSON
+      // 2. Find outermost [ ... ] - handles text before/after JSON
       const start=t.indexOf("[");const end=t.lastIndexOf("]");
       if(start>-1&&end>start){
         try{const r=JSON.parse(t.substring(start,end+1));if(Array.isArray(r)&&r.length)return r;}catch{}
@@ -872,11 +1102,15 @@ function Discover({leads,onSave,onBatchSave,onEnrich,onOutreach,cu,niches:dynNic
     function saveResults(parsed,label){
       if(!parsed?.length){setErr("Could not parse results. Try again.");setLoading(false);return;}
       const isValidWebsite=w=>w&&w.length>3&&w.includes(".")&&!w.includes(" ");
+      const srcMethodMap={"ai":"AI Only","web":"AI + Web","apollo":"Apollo","serp":"SerpAPI"};
       const fresh=parsed.filter(r=>
         isValidWebsite(r.website)&&
         !leads.some(l=>l.name===r.name)&&
-        !isExcludedCompany(r)  // exclude job boards and recruitment firms
-      );
+        !isExcludedCompany(r)
+      ).map(r=>({...r,
+        source:{channel:"Discover",method:srcMethodMap[src]||"AI Only",label:label||searchLabel},
+        stage:"new",
+      }));
       if(parsed.length>0&&fresh.length===0){setErr("All results already exist or have unverifiable websites. Try a different search.");setLoading(false);return;}
       const enriched=fresh.map(r=>({...r,website:r.website.replace(/https?:\/\//,"").replace(/^www\./,"").replace(/\/.*/,"").toLowerCase().trim(),searchMode:mode,searchLabel:label||searchLabel}));
       if(enriched.length){setResults(enriched);onBatchSave(enriched);}
@@ -884,7 +1118,7 @@ function Discover({leads,onSave,onBatchSave,onEnrich,onOutreach,cu,niches:dynNic
     }
 
     try{
-      // ── Mode 1: AI Only — Claude training knowledge ──
+      // ── Mode 1: AI Only - Claude training knowledge ──
       if(src==="ai"){
         const prompt=`You are a B2B sales researcher for Evolve ESolutions (IT/HR/Healthcare/Legal/Financial Services recruitment, Pleasanton CA).
 
@@ -897,7 +1131,7 @@ Rules:
 - Return EXACTLY 3 companies (fewer if not enough match)
 - Each must have a verifiable recent signal with month + year
 - CRITICAL: Only include companies where you know the real website URL with certainty. If unsure of the domain, omit that company entirely.
-- The website field must be a clean domain like "company.com" — no https://, no www., no paths.
+- The website field must be a clean domain like "company.com" - no https://, no www., no paths.
 - ${EXCLUDE_RULE}
 - Output ONLY a raw JSON array, no markdown fences
 
@@ -907,13 +1141,13 @@ Rules:
         saveResults(parsed);
       }
 
-      // ── Mode 2: AI + Web Search — real-time signals ──
+      // ── Mode 2: AI + Web Search - real-time signals ──
       else if(src==="web"){
         const prompt=`You are a B2B sales researcher for Evolve ESolutions (IT/HR/Healthcare/Legal/Financial Services recruitment, Pleasanton CA).
 Search the web and find 3 REAL companies that match:
 - ${target}
 - Size: ${size||"any"} | Location: ${loc||"any"} | Signal: ${sig}
-- Buying signal must be from the last 6 months — use web search to verify recency${excludeClause}
+- Buying signal must be from the last 6 months - use web search to verify recency${excludeClause}
 
 Rules:
 - Use web search to verify each company is real and has a genuine recent signal
@@ -927,7 +1161,7 @@ Rules:
         saveResults(parsed);
       }
 
-      // ── Mode 3: Apollo — verified company database + Claude signals ──
+      // ── Mode 3: Apollo - verified company database + Claude signals ──
       else if(src==="apollo"){
         const s=await sg(S_SETTINGS);
         const apolloKey=s?.apolloKey;
@@ -953,8 +1187,8 @@ Rules:
 - Output ONLY valid JSON array, no markdown, no explanation
 
 [{"name":"","signal":"","fitScore":80,"fitReason":""}]`;
-        const t=await ai(prompt,false,500); // no web search — short signal summaries only
-        // Extract JSON — multiple strategies
+        const t=await ai(prompt,false,500); // no web search - short signal summaries only
+        // Extract JSON - multiple strategies
         let signals={};
         try{
           const clean=t.split("```json").join("").split("```").join("").trim();
@@ -965,7 +1199,7 @@ Rules:
 
         // Build final results from Apollo data + Claude signals
         const parsed=orgs.map(o=>{
-          const sig2=signals[o.name]||{signal:`${o.industry||searchTerm} company with ${o.estimated_num_employees||"unknown"} employees`,fitScore:72,fitReason:`Verified ${o.industry||searchTerm} company — potential staffing need`};
+          const sig2=signals[o.name]||{signal:`${o.industry||searchTerm} company with ${o.estimated_num_employees||"unknown"} employees`,fitScore:72,fitReason:`Verified ${o.industry||searchTerm} company - potential staffing need`};
           return{
             name:o.name,
             industry:o.industry||searchTerm,
@@ -981,7 +1215,7 @@ Rules:
         saveResults(parsed,`Apollo: ${searchTerm}`);
       }
 
-      // ── Mode 4: SerpAPI — Real Google results ──
+      // ── Mode 4: SerpAPI - Real Google results ──
       else if(src==="serp"){
         const s=await sg(S_SETTINGS);
         const serpKey=s?.serpKey;
@@ -1004,14 +1238,14 @@ ${snippets}
 
 JSON array only (no text before or after):
 [{"name":"X","industry":"","size":"","location":"","website":"x.com","signal":"what + month year","fitScore":75,"fitReason":"why recruit here"}]`;
-        // Use conversation format to force JSON — assistant pre-fill trick
+        // Use conversation format to force JSON - assistant pre-fill trick
         const msgs=[
           {role:"user",content:prompt},
           {role:"assistant",content:"["}
         ];
         const raw=await aiMessages(msgs,400);
         const t="["+raw; // prepend the [ we pre-filled
-        // Robust extraction — find [ ... ] block anywhere in response
+        // Robust extraction - find [ ... ] block anywhere in response
         let parsed=null;
         try{
           const clean=t.trim();
@@ -1033,7 +1267,7 @@ JSON array only (no text before or after):
           const fallback=(serpData.organic||[]).slice(0,3).map(o=>{
             // Extract domain from link
             const dom=o.link?new URL(o.link).hostname.replace("www.",""):"";
-            return {name:o.title?.split(/[-|:]/)[0]?.trim()||o.domain,industry:searchTerm,size:"",location:loc||"USA",website:dom,signal:o.snippet?.substring(0,120)||"Found in recent search results",fitScore:70,fitReason:`Matched ${searchTerm} search — verify fit before outreach`};
+            return {name:o.title?.split(/[-|:]/)[0]?.trim()||o.domain,industry:searchTerm,size:"",location:loc||"USA",website:dom,signal:o.snippet?.substring(0,120)||"Found in recent search results",fitScore:70,fitReason:`Matched ${searchTerm} search - verify fit before outreach`};
           }).filter(o=>o.website&&o.website.includes("."));
           if(fallback.length){parsed=fallback;console.log("SerpAPI: used fallback from raw results");}
         }
@@ -1043,9 +1277,9 @@ JSON array only (no text before or after):
     }catch(e){
       const msg=e.message||"";
       if(msg.includes("credit")||msg.includes("balance")||msg.includes("quota")){
-        setErr("Anthropic API credits exhausted — add credits at console.anthropic.com/billing then try again.");
+        setErr("Anthropic API credits exhausted - add credits at console.anthropic.com/billing then try again.");
       } else if(msg.includes("401")||msg.includes("invalid")||msg.toLowerCase().includes("auth")){
-        setErr("Invalid Anthropic API key — check your key in Settings.");
+        setErr("Invalid Anthropic API key - check your key in Settings.");
       } else {
         setErr(`Search failed: ${msg||"Check API key in Settings."}`);
       }
@@ -1059,32 +1293,34 @@ JSON array only (no text before or after):
       {myCount>0&&<div className="flex items-center gap-2 bg-indigo-50 border border-indigo-100 rounded-xl px-4 py-2.5 mb-5"><CheckCircle2 size={14} className="text-indigo-500"/><span className="text-xs font-medium text-indigo-700">You have {myCount} saved lead{myCount!==1?"s":""}.</span></div>}
 
       <div className="bg-white rounded-2xl border border-slate-200 p-6 mb-6">
+        {/* Mode toggle - Industry / Niche / Import */}
+        <div className="flex items-center gap-2 mb-4 p-1 bg-slate-100 rounded-xl w-fit">
+          {[["industry","Industry search"],["niche",`Niche search (${nicheList.length})`],["import","Import"]].map(([m,l])=>(
+            <button key={m} onClick={()=>switchMode(m)} className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all ${mode===m?"bg-white text-slate-800 shadow-sm":"text-slate-500 hover:text-slate-700"}`}>{l}</button>
+          ))}
+        </div>
+
+        {mode==="import"&&<ImportTab leads={leads} onBatchSave={onBatchSave} cu={cu} settings={settings}/>}
+
+        {mode!=="import"&&<div>
         {/* Source selector */}
         <div className="flex items-center gap-2 mb-4">
           <span className="text-xs text-slate-400 font-medium">Source:</span>
           {[
-            {k:"ai",    icon:"🤖", label:"AI Only",   tip:"Claude training knowledge — fast, free"},
-            {k:"web",   icon:"🌐", label:"AI + Web",  tip:"Real-time web search — verified recent signals"},
-            {k:"apollo",icon:"🔍", label:"Apollo",    tip:"Verified company database — most accurate"},
-            {k:"serp",  icon:"🔎", label:"SerpAPI",   tip:"Real Google results — best buying signals (needs SerpAPI key)"},
+            {k:"ai",    icon:"[AI]", label:"AI Only",   tip:"Claude training knowledge - fast, free"},
+            {k:"web",   icon:"[Web]", label:"AI + Web",  tip:"Real-time web search - verified recent signals"},
+            {k:"apollo",icon:"[Apl]", label:"Apollo",    tip:"Verified company database - most accurate"},
+            {k:"serp",  icon:"[Srp]", label:"SerpAPI",   tip:"Real Google results - best buying signals (needs SerpAPI key)"},
           ].map(s=>(
             <button key={s.k} onClick={()=>setSrc(s.k)} title={s.tip}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${src===s.k?"bg-slate-800 text-white border-slate-800":"border-slate-200 text-slate-600 hover:border-slate-400 bg-white"}`}>
               <span>{s.icon}</span>{s.label}
             </button>
           ))}
-          <span className="text-xs text-slate-400 ml-1">{src==="ai"?"Uses Claude's training data":src==="web"?"Searches the web for recent signals":src==="apollo"?"Searches Apollo's verified company database":"Real Google search results — freshest buying signals"}</span>
+          <span className="text-xs text-slate-400 ml-1">{src==="ai"?"Uses Claude's training data":src==="web"?"Searches the web for recent signals":src==="apollo"?"Searches Apollo's verified company database":"Real Google search results - freshest buying signals"}</span>
         </div>
 
-        {/* Mode toggle */}
-        <div className="flex items-center gap-2 mb-5 p-1 bg-slate-100 rounded-xl w-fit">
-          <button onClick={()=>switchMode("industry")} className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all ${mode==="industry"?"bg-white text-slate-800 shadow-sm":"text-slate-500 hover:text-slate-700"}`}>
-            Industry search
-          </button>
-          <button onClick={()=>switchMode("niche")} className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all ${mode==="niche"?"bg-white text-slate-800 shadow-sm":"text-slate-500 hover:text-slate-700"}`}>
-            Niche search <span className={`ml-1 px-1.5 py-0.5 rounded text-xs font-bold ${mode==="niche"?"bg-indigo-100 text-indigo-700":"bg-slate-200 text-slate-500"}`}>18</span>
-          </button>
-        </div>
+        {/* Mode tabs now at top of section */}
 
         <div className="grid grid-cols-2 gap-4 mb-4">
           {mode==="industry"?(
@@ -1113,10 +1349,10 @@ JSON array only (no text before or after):
           </div>
         </div>
 
-        {/* Sub-niche selector — only in niche mode when a niche is selected */}
+        {/* Sub-niche selector - only in niche mode when a niche is selected */}
         {mode==="niche"&&selectedNiche&&(
           <div className="mb-4">
-            <label className="block text-xs font-medium text-slate-400 uppercase tracking-wide mb-1.5">Sub-niche <span className="text-slate-300 normal-case font-normal">(optional — narrows search further)</span></label>
+            <label className="block text-xs font-medium text-slate-400 uppercase tracking-wide mb-1.5">Sub-niche <span className="text-slate-300 normal-case font-normal">(optional - narrows search further)</span></label>
             <div className="flex flex-wrap gap-2">
               {selectedNiche.subs.map(s=>(
                 <button key={s} onClick={()=>setSubNiche(p=>p===s?"":s)} className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${subNiche===s?"bg-slate-800 text-white border-slate-800":"bg-white text-slate-600 border-slate-200 hover:border-indigo-300 hover:text-indigo-700"}`}>{s}</button>
@@ -1138,6 +1374,7 @@ JSON array only (no text before or after):
           {loading?<><Loader2 size={15} className="animate-spin"/>Searching the web...</>:<><Search size={15}/>Find matching clients{searchLabel?` in ${searchLabel}`:""}</>}
         </button>
       </div>
+      </div>}
 
       {err&&<div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 border border-red-100 rounded-xl px-4 py-3 mb-4"><AlertCircle size={14}/>{err}</div>}
 
@@ -1185,17 +1422,45 @@ JSON array only (no text before or after):
 }
 
 // ══ SAVED LEADS ══
-function Saved({leads,onSave,onEnrich,onOutreach,cu}){
+function SourceBadge({source}){
+  if(!source)return null;
+  const icons={"Discover":"[D]","Import":"[I]","Manual":"[M]"};
+  const colors={"AI Only":"bg-violet-50 text-violet-700","AI + Web":"bg-blue-50 text-blue-700","Apollo":"bg-cyan-50 text-cyan-700","SerpAPI":"bg-amber-50 text-amber-700","CSV":"bg-emerald-50 text-emerald-700","Manual Entry":"bg-slate-100 text-slate-600"};
+  return(
+    <span className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full font-medium ${colors[source.method]||"bg-slate-100 text-slate-500"}`} title={`${source.channel} - ${source.method}${source.label?" - "+source.label:""}`}>
+      {icons[source.channel]||"🔍"} {source.method||source.channel}
+    </span>
+  );
+}
+
+function StageBadge({stage}){
+  const m={new:"bg-slate-100 text-slate-600",progress:"bg-blue-100 text-blue-700",closed:"bg-emerald-100 text-emerald-700"};
+  const l={new:"New",progress:"In Progress",closed:"Closed"};
+  return <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${m[stage]||m.new}`}>{l[stage]||"New"}</span>;
+}
+
+function Saved({leads,onSave,onEnrich,onOutreach,cu,onStage,settings}){
   const isAdmin=cu.role==="admin";
   const visible=isAdmin?leads:leads.filter(l=>l.ownerId===cu.username);
+  const [stageTab,setStageTab]=useState("new");
   const [ownerFilter,setOwnerFilter]=useState("all");
-  const filtered=ownerFilter==="all"?visible:visible.filter(l=>l.ownerId===ownerFilter);
+  const staged=visible.filter(l=>(l.stage||"new")===stageTab);
+  const filtered=ownerFilter==="all"?staged:staged.filter(l=>l.ownerId===ownerFilter);
   const owners=[...new Set(leads.map(l=>l.ownerId))];
+  const counts={new:visible.filter(l=>!l.stage||l.stage==="new").length,progress:visible.filter(l=>l.stage==="progress").length,closed:visible.filter(l=>l.stage==="closed").length};
   return(
     <div className="max-w-4xl mx-auto px-6 py-8">
-      <div className="flex items-center justify-between mb-6">
-        <div><h1 className="text-xl font-semibold text-slate-800">{isAdmin?"All leads":"My leads"}</h1><p className="text-sm text-slate-500">{visible.length} {isAdmin?"across all account managers":"saved by you"}</p></div>
+      <div className="flex items-center justify-between mb-4">
+        <div><h1 className="text-xl font-semibold text-slate-800">{isAdmin?"All leads":"My leads"}</h1><p className="text-sm text-slate-500">{visible.length} total · {counts.new} new · {counts.progress} in progress</p></div>
         {isAdmin&&owners.length>1&&<select value={ownerFilter} onChange={e=>setOwnerFilter(e.target.value)} className="px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:outline-none"><option value="all">All users</option>{owners.map(o=><option key={o} value={o}>{o}</option>)}</select>}
+      </div>
+      {/* Stage tabs */}
+      <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl w-fit mb-5">
+        {[["new","New"],["progress","In Progress"],["closed","Closed"]].map(([s,l])=>(
+          <button key={s} onClick={()=>setStageTab(s)} className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold transition-all ${stageTab===s?"bg-white text-slate-800 shadow-sm":"text-slate-500 hover:text-slate-700"}`}>
+            {l}<span className={`ml-1 px-1.5 py-0.5 rounded-full text-xs font-bold ${stageTab===s?"bg-slate-100 text-slate-600":"bg-slate-200 text-slate-400"}`}>{counts[s]}</span>
+          </button>
+        ))}
       </div>
       {filtered.length===0?<div className="bg-white rounded-2xl border border-slate-200 p-12 text-center"><Bookmark size={32} className="text-slate-300 mx-auto mb-3"/><div className="text-slate-500 text-sm">No leads here yet.</div></div>:(
         <div className="flex flex-col gap-3">
@@ -1204,7 +1469,7 @@ function Saved({leads,onSave,onEnrich,onOutreach,cu}){
               <div className="flex items-center gap-3">
                 <Av name={c.name} idx={i}/>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap"><span className="font-semibold text-slate-800 text-sm">{c.name}</span><Score s={c.fitScore}/>{isAdmin&&c.ownerName&&<span className="flex items-center gap-1 text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full"><User size={10}/>{c.ownerName}</span>}</div>
+                  <div className="flex items-center gap-2 flex-wrap"><span className="font-semibold text-slate-800 text-sm">{c.name}</span><Score s={c.fitScore}/><StageBadge stage={c.stage}/>{c.source&&<SourceBadge source={c.source}/>}{isAdmin&&c.ownerName&&<span className="flex items-center gap-1 text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full"><User size={10}/>{c.ownerName}</span>}</div>
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-xs text-slate-500">{c.industry} · {c.location}</span>
                     {c.website&&<a href={`https://${c.website}`} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()} className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"><Globe size={10}/>{c.website}</a>}
@@ -1214,6 +1479,11 @@ function Saved({leads,onSave,onEnrich,onOutreach,cu}){
                 <div className="flex items-center gap-2 flex-shrink-0">
                   <button onClick={()=>onEnrich(c,i)} className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-600 text-white rounded-lg text-xs font-medium hover:bg-violet-700"><TrendingUp size={12}/>Enrich</button>
                   <button onClick={()=>onOutreach(c)} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-medium hover:bg-emerald-700"><Mail size={12}/>Outreach</button>
+                  <div className="flex gap-1">
+                    {(c.stage||"new")!=="progress"&&<button onClick={e=>{e.stopPropagation();onStage(c.name,"progress");}} className="px-2 py-1.5 text-xs border border-blue-200 text-blue-600 rounded-lg hover:bg-blue-50" title="Move to In Progress">→ Progress</button>}
+                    {(c.stage||"new")!=="closed"&&<button onClick={e=>{e.stopPropagation();onStage(c.name,"closed");}} className="px-2 py-1.5 text-xs border border-slate-200 text-slate-500 rounded-lg hover:bg-slate-50" title="Close lead">✓ Close</button>}
+                    {c.stage==="closed"&&<button onClick={e=>{e.stopPropagation();onStage(c.name,"new");}} className="px-2 py-1.5 text-xs border border-slate-200 text-slate-500 rounded-lg hover:bg-slate-50" title="Re-open">↩ Re-open</button>}
+                  </div>
                   <button onClick={()=>onSave(c)} className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 text-slate-500 rounded-lg text-xs hover:border-red-200 hover:text-red-500"><Trash2 size={12}/>Remove</button>
                 </div>
               </div>
@@ -1317,20 +1587,20 @@ Return ONLY valid JSON:
       const isCredits=msg.includes("credit")||msg.includes("balance")||msg.includes("quota");
       const isAuth=msg.includes("401")||msg.toLowerCase().includes("invalid")||msg.toLowerCase().includes("auth");
       setErr(
-        isCredits?"Anthropic API credits exhausted — add credits at console.anthropic.com/billing. You can still use the Apollo contacts button.":
-        isRateLimit?`AI rate limit — try again shortly. You can still use "Apollo contacts" button to fetch contacts now without AI.`:
-        isAuth?"Invalid Anthropic API key — check your key in Settings.":
+        isCredits?"Anthropic API credits exhausted - add credits at console.anthropic.com/billing. You can still use the Apollo contacts button.":
+        isRateLimit?`AI rate limit - try again shortly. You can still use "Apollo contacts" button to fetch contacts now without AI.`:
+        isAuth?"Invalid Anthropic API key - check your key in Settings.":
         `Enrichment failed: ${msg}`
       );
     }setLoading(false);
   }
   async function enrichWithApollo(){
     if(!apolloKey){setErr("Add Apollo API key in Settings first.");return;}
-    // Apollo can run independently — no AI enrichment required
+    // Apollo can run independently - no AI enrichment required
     setLoading(true);setErr("");setCached(false);
     if(!data) setData({}); // init empty data shell so contacts can be stored
     try{
-      // Extract clean domain from website — NO guessing from company name
+      // Extract clean domain from website - NO guessing from company name
       const rawSite=company.website?.replace(/https?:\/\//,"").replace(/^www\./,"").replace(/\/.*/,"")?.toLowerCase()?.trim()||"";
       const domain=rawSite;
       if(!domain||domain.length<4||!domain.includes(".")){
@@ -1347,7 +1617,7 @@ Return ONLY valid JSON:
         setErr(`No contacts found on Apollo for domain: ${domain}. Check the domain is correct or try a different company.`);
         setLoading(false);return;
       }
-      // apolloFindContacts already returns structured contacts — pass through directly
+      // apolloFindContacts already returns structured contacts - pass through directly
       // Clean legacy "Not found"/"Unknown" strings from older cache entries
       const apolloContacts=people.map(p=>({
         ...p,
@@ -1370,7 +1640,7 @@ Return ONLY valid JSON:
         sbSaveEnrichment(sbUrl,sbKey,slug,company.name,merged);
         sbSaveContacts(sbUrl,sbKey,company.name,apolloContacts);
       }
-      onLogAct(company,`Apollo enriched by ${cu.displayName} · ${apolloContacts.length} contact${apolloContacts.length!==1?"s":""}${apolloContacts.filter(c=>c.email).length>0?` · ${apolloContacts.filter(c=>c.email).length} with email`:"" }`);
+      onLogAct(company,`Apollo enriched by ${cu.displayName} - ${apolloContacts.length} contact${apolloContacts.length!==1?"s":""}${apolloContacts.filter(c=>c.email).length>0?` · ${apolloContacts.filter(c=>c.email).length} with email`:"" }`);
     }catch(e){setErr(`Apollo contact enrichment failed: ${e.message}`);}
     setLoading(false);
   }
@@ -1392,7 +1662,7 @@ Return ONLY valid JSON:
     <div className="max-w-4xl mx-auto px-6 py-8">
       <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-700 mb-5"><ArrowLeft size={14}/>Back</button>
       <div className="flex items-center gap-3 mb-6"><Av name={company.name} idx={idx} lg/><div className="flex-1"><div className="flex items-center gap-2"><h1 className="text-xl font-semibold text-slate-800">{company.name}</h1><Score s={company.fitScore}/></div><p className="text-sm text-slate-500">{company.industry} · {company.size} · {company.location}</p>
-        {company.website?<a href={`https://${company.website}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"><Globe size={11}/>{company.website}</a>:<span className="text-xs text-amber-600 flex items-center gap-1">⚠️ No verified website — Apollo enrichment unavailable</span>}
+        {company.website?<a href={`https://${company.website}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"><Globe size={11}/>{company.website}</a>:<span className="text-xs text-amber-600 flex items-center gap-1">⚠️ No verified website - Apollo enrichment unavailable</span>}
         </div><div className="flex gap-2"><button onClick={()=>onOutreach(company)} className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white rounded-xl text-sm font-medium hover:bg-emerald-700"><Mail size={14}/>Outreach</button><button onClick={()=>onSave(company)} className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium border transition-all ${isSaved?"bg-slate-800 text-white border-slate-800":"border-slate-200 text-slate-700 hover:border-slate-400"}`}>{isSaved?<><BookmarkCheck size={14}/>Saved</>:<><Bookmark size={14}/>Save</>}</button></div></div>
       {!data&&!loading&&<div className="bg-white rounded-2xl border border-slate-200 p-10 text-center">
         {apolloKey&&<div className="mb-4">
@@ -1407,7 +1677,7 @@ Return ONLY valid JSON:
         <p className="text-sm text-slate-500 mb-6 max-w-sm mx-auto">AI researches the company and surfaces contacts, news, tech stack and a tailored approach angle. Then optionally overlay verified contacts from Apollo.</p>
         <button onClick={enrich} className="px-6 py-3 bg-violet-600 text-white rounded-xl text-sm font-medium hover:bg-violet-700 flex items-center gap-2 mx-auto"><Zap size={15}/>Run AI enrichment</button>
       </div>}
-      {loading&&<div className="bg-white rounded-2xl border border-slate-200 p-10 text-center"><Loader2 size={28} className="animate-spin text-violet-500 mx-auto mb-3"/><p className="text-sm text-slate-500 mb-1">Researching {company.name}…</p><p className="text-xs text-slate-400">Classifying contacts — 20–30 seconds.</p></div>}
+      {loading&&<div className="bg-white rounded-2xl border border-slate-200 p-10 text-center"><Loader2 size={28} className="animate-spin text-violet-500 mx-auto mb-3"/><p className="text-sm text-slate-500 mb-1">Researching {company.name}…</p><p className="text-xs text-slate-400">Classifying contacts - 20–30 seconds.</p></div>}
       {err&&<div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 border border-red-100 rounded-xl px-4 py-3 mb-4"><AlertCircle size={14}/>{err}</div>}
       {data&&<div className="space-y-4">
         <div className={`flex items-center justify-between px-4 py-2.5 rounded-xl border ${cached?"bg-indigo-50 border-indigo-100":"bg-emerald-50 border-emerald-100"}`}>
@@ -1478,7 +1748,7 @@ Return ONLY valid JSON:
               </div>
             ))}
           </div>
-          {(data.keyContacts||[]).length===0&&<p className="text-xs text-slate-400 text-center py-4">No contacts yet — run enrichment or add manually above.</p>}
+          {(data.keyContacts||[]).length===0&&<p className="text-xs text-slate-400 text-center py-4">No contacts yet - run enrichment or add manually above.</p>}
         </div>
         <div className="grid grid-cols-2 gap-4">
           <div className="bg-white rounded-2xl border border-slate-200 p-5"><h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3 flex items-center gap-1.5"><BarChart2 size={13}/>Recent news</h3><ul className="space-y-2">{(data.recentNews||[]).map((n,i)=><li key={i} className="flex items-start gap-2 text-sm text-slate-700"><span className="w-4 h-4 rounded-full bg-violet-100 text-violet-700 text-xs flex items-center justify-center flex-shrink-0 mt-0.5">{i+1}</span>{n}</li>)}</ul></div>
@@ -1511,13 +1781,13 @@ function ContactPreview({company,settings}){
   },[company.name]);
   if(!preview)return null;
   if(preview.total===0)return(
-    <p className="text-xs text-amber-600 mt-1">⚠️ No contacts found — run Enrich first to get contact emails</p>
+    <p className="text-xs text-amber-600 mt-1">⚠️ No contacts found - run Enrich first to get contact emails</p>
   );
   return(
     <div className="mt-1">
       {preview.valid>0
         ?<p className="text-xs text-emerald-600">✓ {preview.valid} contact{preview.valid!==1?"s":""} with email ready to push{preview.valid<preview.total?` (${preview.total-preview.valid} skipped, no email)`:""}</p>
-        :<p className="text-xs text-amber-600">⚠️ {preview.total} contact{preview.total!==1?"s":""} found but none have email addresses — edit contacts in Enrich</p>
+        :<p className="text-xs text-amber-600">⚠️ {preview.total} contact{preview.total!==1?"s":""} found but none have email addresses - edit contacts in Enrich</p>
       }
     </div>
   );
@@ -1545,20 +1815,20 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
   const aRefs=useRef({});
   const instantlyKey=settings?.instantlyV2Key||settings?.instantlyKey||"";
   useEffect(()=>{sg(`enr_${company.name.toLowerCase().replace(/\s+/g,"_")}`).then(d=>{if(d?.keyContacts){setLiC(d.keyContacts.filter(c=>c.linkedin&&c.linkedin.length>5));setPhC(d.keyContacts);}});},[company.name]);
-  const E=`Evolve ESolutions — IT, HR, Healthcare, Financial Services, Legal recruitment, Pleasanton CA. 24–48hr screened candidates. Passive talent. No placement no fee. 1–3 day onboarding.`;
+  const E=`Evolve ESolutions - IT, HR, Healthcare, Financial Services, Legal recruitment, Pleasanton CA. 24-48hr screened candidates. Passive talent. No placement no fee. 1-3 day onboarding.`;
   const iMap={"Technology / SaaS":"IT/software","Financial Services":"finance/compliance","Healthcare":"healthcare/clinical","Legal":"legal/paralegal","Manufacturing":"engineering/ops","E-commerce / Retail":"tech/ops","Construction":"project management","Professional Services":"professional/admin","Media & Marketing":"creative/marketing","Logistics & Supply Chain":"ops/tech"};
   const spec=iMap[company.industry]||company.industry;
-  // Emails use Instantly merge tags — sender name and signature injected per mailbox
+  // Emails use Instantly merge tags - sender name and signature injected per mailbox
   const placeholderSig="{{accountSignature}}";
   const prompts={
-    intro:`Write a cold intro email from Evolve ESolutions to a decision-maker at ${company.name}.\n${E}\nTarget: ${company.name}, ${company.industry}, ${company.size}, ${company.location}. Signal: ${company.signal}. Why: ${company.fitReason}\nStart the email body with "Hi {{firstName}}," on the first line. Hook on signal. One sentence on Evolve+${spec}. 24–48hr+passive talent pitch. Specific day CTA. Under 120 words body. Professional, human tone.\nSubject: [under 8 words, no "Introducing"]\n\nHi {{firstName}},\n\n[email body]\n\n${placeholderSig}`,
-    followup:`Write a follow-up email from Evolve ESolutions to ${company.name} — no reply received.\n${E}\nSignal: ${company.signal}. Acknowledge they are busy. Lead with different value (no-fee model). Mention recent ${spec} placements. Soft CTA. Under 80 words.\nStart with "Hi {{firstName}}," — do not repeat it in the body.\nSubject: [subject]\n\nHi {{firstName}},\n\n[email body]\n\n${placeholderSig}`,
-    casestudy:`Write a case study email from Evolve ESolutions to ${company.name}.\n${E}\nSignal: ${company.signal}. Include a mini case study: similar company, similar role, 24-48hr timeline, outcome. Connect directly to ${company.name}'s situation. Under 110 words. CTA: happy to share more.\nStart with "Hi {{firstName}}," — do not repeat it in the body.\nSubject: [subject]\n\nHi {{firstName}},\n\n[email body]\n\n${placeholderSig}`,
-    value:`Write a value-add email from Evolve ESolutions to ${company.name} — asking for nothing.\n${E}\nSignal: ${company.signal}. Share a genuine hiring trend insight for ${spec}. Position as a knowledgeable partner. Soft close. Under 100 words.\nStart with "Hi {{firstName}}," — do not repeat it in the body.\nSubject: [subject]\n\nHi {{firstName}},\n\n[email body]\n\n${placeholderSig}`,
-    breakup:`Write a break-up email from Evolve ESolutions to ${company.name}. Acknowledge it's one-sided. Leave the door open. One final value line. Under 70 words. The best break-up emails always get replies.\nStart with "Hi {{firstName}}," — do not repeat it in the body.\nSubject: [subject]\n\nHi {{firstName}},\n\n[email body]\n\n${placeholderSig}`,
+    intro:`Write a cold intro email from Evolve ESolutions to a decision-maker at ${company.name}.\n${E}\nTarget: ${company.name}, ${company.industry}, ${company.size}, ${company.location}. Signal: ${company.signal}. Why: ${company.fitReason}\nStart the email body with "Hi {{firstName}}," on the first line. Hook on signal. One sentence on Evolve+${spec}. 24-48hr+passive talent pitch. Specific day CTA. Under 120 words body. Professional, human tone.\nSubject: [under 8 words, no "Introducing"]\n\nHi {{firstName}},\n\n[email body]\n\n${placeholderSig}`,
+    followup:`Write a follow-up email from Evolve ESolutions to ${company.name} - no reply received.\n${E}\nSignal: ${company.signal}. Acknowledge they are busy. Lead with different value (no-fee model). Mention recent ${spec} placements. Soft CTA. Under 80 words.\nStart with "Hi {{firstName}}," - do not repeat it in the body.\nSubject: [subject]\n\nHi {{firstName}},\n\n[email body]\n\n${placeholderSig}`,
+    casestudy:`Write a case study email from Evolve ESolutions to ${company.name}.\n${E}\nSignal: ${company.signal}. Include a mini case study: similar company, similar role, 24-48hr timeline, outcome. Connect directly to ${company.name}'s situation. Under 110 words. CTA: happy to share more.\nStart with "Hi {{firstName}}," - do not repeat it in the body.\nSubject: [subject]\n\nHi {{firstName}},\n\n[email body]\n\n${placeholderSig}`,
+    value:`Write a value-add email from Evolve ESolutions to ${company.name} - asking for nothing.\n${E}\nSignal: ${company.signal}. Share a genuine hiring trend insight for ${spec}. Position as a knowledgeable partner. Soft close. Under 100 words.\nStart with "Hi {{firstName}}," - do not repeat it in the body.\nSubject: [subject]\n\nHi {{firstName}},\n\n[email body]\n\n${placeholderSig}`,
+    breakup:`Write a break-up email from Evolve ESolutions to ${company.name}. Acknowledge it's one-sided. Leave the door open. One final value line. Under 70 words. The best break-up emails always get replies.\nStart with "Hi {{firstName}}," - do not repeat it in the body.\nSubject: [subject]\n\nHi {{firstName}},\n\n[email body]\n\n${placeholderSig}`,
   };
   async function generateAll(){
-    // Generate all email steps sequentially — shows each one as it generates
+    // Generate all email steps sequentially - shows each one as it generates
     const emailSteps=tmpl.steps.filter(s=>s.type==="email");
     setLoading(true);setIErr("");
     for(const s of emailSteps){
@@ -1610,7 +1880,7 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
 
   async function pushToInstantly(){
     if(!instantlyKey){setIErr("Add Instantly API key in Settings first.");return;}
-    // Use already-generated steps — no re-generation needed (avoids rate limit)
+    // Use already-generated steps - no re-generation needed (avoids rate limit)
     const emailSteps=tmpl.steps.filter(s=>s.type==="email");
     const missing=emailSteps.filter(s=>!generatedSteps[s.label]);
     if(missing.length>0){
@@ -1621,7 +1891,7 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
     try{
       // Use pre-generated steps from state
       const steps=emailSteps.map(s=>generatedSteps[s.label]).filter(Boolean);
-      // Load enrichment — try localStorage first, fall back to Supabase
+      // Load enrichment - try localStorage first, fall back to Supabase
       let enriched=await sg(`enr_${company.name.toLowerCase().replace(/\s+/g,"_")}`);
       if((!enriched?.keyContacts?.length)&&settings?.supabaseUrl&&settings?.supabaseKey){
         const slug=company.name.toLowerCase().replace(/\s+/g,"_");
@@ -1634,7 +1904,7 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
         .map(ct=>({...ct,email:(ct.email&&ct.email!=="Not found"&&ct.email.includes("@"))?ct.email:null}))
         .filter(ct=>ct.email);
 
-      // Hunter.io email verification — skip if no key
+      // Hunter.io email verification - skip if no key
       let contacts=rawContacts;
       const hunterKey=settings?.hunterKey;
       if(hunterKey&&rawContacts.length){
@@ -1658,15 +1928,15 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
       setISent(contacts.length);
       if(!contacts.length){
         const reason=allContacts.length===0
-          ?"No contacts found — run AI Enrichment or Apollo first to get contact details."
+          ?"No contacts found - run AI Enrichment or Apollo first to get contact details."
           :`${allContacts.length} contact${allContacts.length!==1?"s":""} found but none have verified email addresses. Edit contacts in Enrich to add emails.`;
         setIErr(reason);setIPushing(false);return;
       }
-      const campaignName=`Evolve — ${company.name} — ${new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`;
+      const campaignName=`Evolve - ${company.name} - ${new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`;
       const pushResult=await instantlyCreateCampaign(instantlyKey,campaignName,contacts,steps);
       const campaignId=pushResult.campaignId||pushResult;
       if(pushResult.addResult)setIResult(pushResult.addResult);
-      onLogAct(company,`pushed to Instantly · ${tmpl.label} · ${contacts.length} contact${contacts.length!==1?"s":""} · ID: ${campaignId}`);
+      onLogAct(company,`pushed to Instantly - ${tmpl.label} - ${contacts.length} contact${contacts.length!==1?"s":""} - ID: ${campaignId}`);
       setIPushed(campaignId);
       // Save full sequence to DB
       if(settings?.supabaseUrl&&settings?.supabaseKey){
@@ -1675,8 +1945,8 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
     }catch(e){setIErr(`Instantly push failed: ${e.message}`);}
     setIPushing(false);
   }
-  async function genLi(c,i){setLiLoad(p=>({...p,[i]:true}));const t=await ai(`LinkedIn connection note from Evolve ESolutions to ${c.name}, ${c.title} at ${company.name}. Context: ${company.signal}. Max 300 chars. Warm, peer-to-peer, specific hook, no clichés. Return ONLY note text.`).catch(()=>"Error.");setLiMsg(p=>({...p,[i]:t.trim()}));setLiLoad(p=>({...p,[i]:false}));}
-  async function genScript(c,i){setLScript(p=>({...p,[i]:true}));const t=await ai(`Cold call script for ${c.name}, ${c.title} at ${company.name}. Evolve ESolutions — IT/HR/Healthcare recruitment, 24–48hr, passive talent, no-fee. Signal: ${company.signal}. Natural, confident. [OPENING][IF ENGAGE][OBJECTION: PSL][CLOSE]. 200-280 words.`).catch(()=>"Error.");setScripts(p=>({...p,[i]:t}));setPhTab(p=>({...p,[i]:"script"}));setLScript(p=>({...p,[i]:false}));}
+  async function genLi(c,i){setLiLoad(p=>({...p,[i]:true}));const t=await ai(`LinkedIn connection note from Evolve ESolutions to ${c.name}, ${c.title} at ${company.name}. Context: ${company.signal}. Max 300 chars. Warm, peer-to-peer, specific hook, no cliches. Return ONLY note text.`).catch(()=>"Error.");setLiMsg(p=>({...p,[i]:t.trim()}));setLiLoad(p=>({...p,[i]:false}));}
+  async function genScript(c,i){setLScript(p=>({...p,[i]:true}));const t=await ai(`Cold call script for ${c.name}, ${c.title} at ${company.name}. Evolve ESolutions - IT/HR/Healthcare recruitment, 24-48hr, passive talent, no-fee. Signal: ${company.signal}. Natural, confident. [OPENING][IF ENGAGE][OBJECTION: PSL][CLOSE]. 200-280 words.`).catch(()=>"Error.");setScripts(p=>({...p,[i]:t}));setPhTab(p=>({...p,[i]:"script"}));setLScript(p=>({...p,[i]:false}));}
   async function genText(c,i){setLText(p=>({...p,[i]:true}));const t=await ai(`SMS follow-up from Evolve ESolutions to ${c.name} at ${company.name} after missed call. Context: ${company.signal}. Max 160 chars. Human not marketing. Identify yourself. One value hook. Light CTA. Return ONLY SMS text.`).catch(()=>"Error.");setTexts(p=>({...p,[i]:t.trim()}));setPhTab(p=>({...p,[i]:"text"}));setLText(p=>({...p,[i]:false}));}
   async function genVoice(c,i){
     const s=await sg(S_SETTINGS);
@@ -1687,7 +1957,7 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
       // Auto-generate script if none yet
       let script=scripts[i];
       if(!script){
-        script=await ai(`Cold call script for ${c.name}, ${c.title} at ${company.name}. Evolve ESolutions — IT/HR/Healthcare recruitment, 24–48hr, passive talent, no-fee. Signal: ${company.signal}. Natural, confident. [OPENING][IF ENGAGE][OBJECTION: PSL][CLOSE]. 200-280 words.`).catch(()=>"");
+        script=await ai(`Cold call script for ${c.name}, ${c.title} at ${company.name}. Evolve ESolutions - IT/HR/Healthcare recruitment, 24-48hr, passive talent, no-fee. Signal: ${company.signal}. Natural, confident. [OPENING][IF ENGAGE][OBJECTION: PSL][CLOSE]. 200-280 words.`).catch(()=>"");
         if(script)setScripts(p=>({...p,[i]:script}));
       }
       if(!script){alert("Could not generate script. Try again.");setLVoice(p=>({...p,[i]:false}));return;}
@@ -1716,14 +1986,14 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
         <div className="flex-1 min-w-0">
           {iPushed?(
             <div className="flex items-center gap-2"><CheckCircle2 size={14} className="text-emerald-500 flex-shrink-0"/><div><p className="text-xs font-semibold text-emerald-700">Campaign draft created in Instantly</p><div>
-                <p className="text-xs text-emerald-600 font-medium">Campaign created — activate it in Instantly to start sending.</p>
+                <p className="text-xs text-emerald-600 font-medium">Campaign created - activate it in Instantly to start sending.</p>
                 <p className="text-xs text-emerald-500 mt-0.5">ID: {iPushed}</p>
-                <p className="text-xs text-emerald-500">{iSent} lead{iSent!==1?"s":""} added{iSkipped>0?` · ${iSkipped} skipped (no email)`:""}</p>
+                <p className="text-xs text-emerald-500">{iSent} lead{iSent!==1?"s":""} added{iSkipped>0?` - ${iSkipped} skipped (no email)`:""}</p>
               </div></div></div>
           ):(
             <div>
               <p className="text-xs font-semibold text-slate-700">Push full sequence to Instantly</p>
-              <p className="text-xs text-slate-500">{(()=>{const total=tmpl.steps.filter(s=>s.type==="email").length;const ready=Object.keys(generatedSteps).length;return ready>=total?`✓ All ${total} steps ready to push`:`${ready}/${total} steps generated — click each step to generate before pushing`;})()}</p>
+              <p className="text-xs text-slate-500">{(()=>{const total=tmpl.steps.filter(s=>s.type==="email").length;const ready=Object.keys(generatedSteps).length;return ready>=total?`All ${total} steps ready to push`:`${ready}/${total} steps generated - click each step to generate before pushing`;})()}</p>
               <ContactPreview company={company} settings={settings}/>
             </div>
           )}
@@ -1745,7 +2015,7 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
 
       <div className="grid grid-cols-5 gap-6">
         <div className="col-span-2 space-y-4">
-          <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-4"><div className="text-xs font-semibold text-indigo-400 uppercase tracking-wide mb-3 flex items-center gap-1.5"><Sparkles size={12}/>Pitch pillars</div><ul className="space-y-2">{[["⚡","24–48hr delivery"],["🎯","Passive talent access"],["🔄","Contract, perm & retained"],["✅","No placement, no fee"],["🚀","1–3 day onboarding"]].map(([icon,text])=><li key={text} className="flex items-center gap-2 text-xs text-indigo-800"><span>{icon}</span><span>{text}</span></li>)}</ul></div>
+          <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-4"><div className="text-xs font-semibold text-indigo-400 uppercase tracking-wide mb-3 flex items-center gap-1.5"><Sparkles size={12}/>Pitch pillars</div><ul className="space-y-2">{[["⚡","24–48hr delivery"],["🎯","Passive talent access"],["🔄","Contract, perm & retained"],["✅","No placement, no fee"],["🚀","1-3 day onboarding"]].map(([icon,text])=><li key={text} className="flex items-center gap-2 text-xs text-indigo-800"><span>{icon}</span><span>{text}</span></li>)}</ul></div>
           <div className="bg-white rounded-2xl border border-slate-200 p-4">
             <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Email sequence</h3>
             <div className="flex gap-1.5 mb-2">{SEQ_TEMPLATES.map(t=><button key={t.id} onClick={()=>{setTmpl(t);setGeneratedSteps({});setStep(null);setContent("");}} className={`flex-1 py-2 rounded-xl border text-xs font-medium transition-all ${tmpl.id===t.id?"bg-slate-800 text-white border-slate-800":"border-slate-200 text-slate-600 hover:border-slate-400"}`}>{t.label}</button>)}</div>
@@ -1757,7 +2027,7 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
               <div className="space-y-2">{tmpl.steps.map((s,i)=><div key={i} className={`relative flex items-center gap-3 p-2.5 rounded-xl cursor-pointer border transition-all ${step?.label===s.label&&step?.day===s.day?"border-emerald-200 bg-emerald-50":"border-transparent hover:border-slate-200 hover:bg-slate-50"}`} onClick={()=>{
                   const eTypeForStep=EMAIL_TYPES.find(e=>s.label.toLowerCase().includes(e[0]))?.[0]||"intro";
                   if(generatedSteps[s.label]){
-                    // Already generated — show cached, no API call
+                    // Already generated - show cached, no API call
                     setStep(s);setEType(eTypeForStep);
                     const gs=generatedSteps[s.label];
                     setContent(`Subject: ${gs.subject}\n\n${gs.body}`);
@@ -1835,7 +2105,7 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
       {/* LinkedIn */}
       <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden mt-4">
         <button onClick={()=>setLiOpen(p=>!p)} className="w-full flex items-center justify-between px-5 py-4 hover:bg-slate-50"><div className="flex items-center gap-2"><Linkedin size={15} className="text-blue-600"/><span className="text-sm font-semibold text-slate-800">LinkedIn outreach</span><span className="text-xs text-slate-400 ml-1">· separate from email sequence</span></div><svg className={`text-slate-400 transition-transform ${liOpen?"rotate-180":""}`} width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2"><path d="M2 5l5 5 5-5"/></svg></button>
-        {liOpen&&<div className="px-5 pb-5 border-t border-slate-100"><p className="text-xs text-slate-500 mt-4 mb-4">Connect before Day 1 — a recognised name lifts open rates significantly.</p>
+        {liOpen&&<div className="px-5 pb-5 border-t border-slate-100"><p className="text-xs text-slate-500 mt-4 mb-4">Connect before Day 1 - a recognised name lifts open rates significantly.</p>
           {liC.length===0&&<div className="text-sm text-slate-400 py-2">Run enrichment first to populate LinkedIn contacts.</div>}
           <div className="space-y-4">{liC.map((c,i)=><div key={i} className="border border-slate-100 rounded-xl p-4 bg-slate-50">
             <div className="flex items-center gap-3 mb-3"><div className={`w-9 h-9 rounded-xl flex items-center justify-center font-semibold text-sm flex-shrink-0 ${PALETTES[i%PALETTES.length]}`}>{c.name.split(" ").slice(0,2).map(w=>w[0]).join("").toUpperCase()}</div><div className="flex-1"><div className="text-sm font-semibold text-slate-800">{c.name}</div><div className="text-xs text-slate-500">{c.title}</div></div>{c.linkedin?<a href={`https://${c.linkedin.replace("https://","")}`} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700"><Linkedin size={12}/>View profile</a>:<a href={`https://linkedin.com/search/results/people/?keywords=${encodeURIComponent(c.name+" "+company.name)}`} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 text-slate-500 rounded-lg text-xs font-medium hover:border-slate-400"><Linkedin size={12}/>Search</a>}</div>
@@ -1934,7 +2204,10 @@ export default function App(){
         next=prev.filter(l=>l.name!==company.name);
         if(settings.supabaseUrl&&settings.supabaseKey) sbDeleteRow(settings.supabaseUrl,settings.supabaseKey,"leads","name",company.name);
       } else {
-        const lead={...company,ownerId:cu.username,ownerName:cu.displayName,activityLog:[]};
+        const lead={...company,ownerId:cu.username,ownerName:cu.displayName,activityLog:[],
+          stage:company.stage||"new",
+          source:company.source||{channel:"Discover",method:"AI Only",label:company.searchLabel||""},
+        };
         const withLog=addLog(lead,`saved by ${cu.displayName}`,cu);
         next=[...prev,withLog];
         if(settings.supabaseUrl&&settings.supabaseKey) sbUpsert(settings.supabaseUrl,settings.supabaseKey,"leads",{name:withLog.name,owner_id:withLog.ownerId,owner_name:withLog.ownerName,data:withLog},"name");
@@ -1943,14 +2216,17 @@ export default function App(){
       return next;
     });
   }
-  // Batch save: atomically saves multiple leads at once — avoids stale state bug
+  // Batch save: atomically saves multiple leads at once - avoids stale state bug
   function batchSave(companies){
     setLeads(prev=>{
       let next=[...prev];
       const toSave=[];
       companies.forEach(company=>{
         if(!next.some(l=>l.name===company.name)){
-          const lead={...company,ownerId:cu.username,ownerName:cu.displayName,activityLog:[]};
+          const lead={...company,ownerId:cu.username,ownerName:cu.displayName,activityLog:[],
+            stage:company.stage||"new",
+            source:company.source||{channel:"Discover",method:"AI Only",label:""},
+          };
           const withLog=addLog(lead,`discovered by ${cu.displayName}`,cu);
           next.push(withLog);
           toSave.push(withLog);
@@ -1966,6 +2242,7 @@ export default function App(){
     });
   }
   function logAct(company,action){setLeads(prev=>{const n=prev.map(l=>{if(l.name!==company.name)return l;const updated=addLog(l,action,cu);if(settings.supabaseUrl&&settings.supabaseKey)sbUpsert(settings.supabaseUrl,settings.supabaseKey,"leads",{name:updated.name,owner_id:updated.ownerId,owner_name:updated.ownerName,data:updated},"name");return updated;});ss(S_LEADS,n);return n;});}
+  function setStage(companyName,stage){setLeads(prev=>{const n=prev.map(l=>{if(l.name!==companyName)return l;const updated={...l,stage};if(settings.supabaseUrl&&settings.supabaseKey)sbUpsert(settings.supabaseUrl,settings.supabaseKey,"leads",{name:updated.name,owner_id:updated.ownerId,owner_name:updated.ownerName,data:updated},"name");return updated;});ss(S_LEADS,n);return n;});}
   function isSaved(name){return leads.some(l=>l.name===name);}
   function goEnrich(c,i){setETarget(c);setEIdx(i||0);setView("enrich");}
   function goOutreach(c){setOTarget(c);setView("outreach");}
@@ -1989,8 +2266,8 @@ export default function App(){
         </div>
       </div>
 
-      {view==="discover"&&<Discover leads={leads} onSave={toggleSave} onBatchSave={batchSave} onEnrich={goEnrich} onOutreach={goOutreach} cu={cu} niches={dynNiches} industries={dynIndustries}/>}
-      {view==="saved"&&<Saved leads={leads} onSave={toggleSave} onEnrich={goEnrich} onOutreach={goOutreach} cu={cu}/>}
+      {view==="discover"&&<Discover leads={leads} onSave={toggleSave} onBatchSave={batchSave} onEnrich={goEnrich} onOutreach={goOutreach} cu={cu} niches={dynNiches} industries={dynIndustries} settings={settings}/>}
+      {view==="saved"&&<Saved leads={leads} onSave={toggleSave} onEnrich={goEnrich} onOutreach={goOutreach} cu={cu} onStage={setStage} settings={settings}/>}
       {view==="settings"&&isAdmin&&<SettingsView settings={settings} onSave={saveSettings} users={users} onAdd={addUser} onRemove={removeUser} onPwReset={pwReset} cu={cu} niches={dynNiches} industries={dynIndustries} onSaveNiches={saveNiches} onSaveIndustries={saveIndustries}/>}
       {view==="enrich"&&eTarget&&<Enrich company={eTarget} idx={eIdx} onBack={()=>setView("discover")} onOutreach={goOutreach} onSave={toggleSave} isSaved={isSaved(eTarget.name)} cu={cu} settings={settings} onLogAct={logAct}/>}
       {view==="outreach"&&oTarget&&<Outreach company={oTarget} onBack={()=>setView("discover")} onSave={toggleSave} isSaved={isSaved(oTarget.name)} cu={cu} onLogAct={logAct} settings={settings}/>}
