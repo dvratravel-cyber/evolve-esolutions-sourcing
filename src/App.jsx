@@ -821,6 +821,20 @@ function Discover({leads,onSave,onBatchSave,onEnrich,onOutreach,cu,niches:dynNic
 
   const canSearch = mode==="industry" ? !!industry : !!niche;
 
+  // Companies to never include regardless of search mode
+  const EXCLUDE_RULE="NEVER include: job boards (Indeed, LinkedIn, Glassdoor, ZipRecruiter, Monster, Reed, Totaljobs), recruitment agencies, staffing firms, RPO providers, headhunters, talent acquisition firms, HR outsourcing companies, or any business whose primary service is recruiting/hiring for other companies. Evolve ESolutions IS a recruitment firm — exclude all competitors.";
+  const EXCLUDE_INDUSTRIES=["staffing","recruiting","human resources outsourcing","rpo","employment agency","headhunting","talent acquisition"];
+  function isExcludedCompany(r){
+    const name=(r.name||"").toLowerCase();
+    const ind=(r.industry||"").toLowerCase();
+    const site=(r.website||"").toLowerCase();
+    // Exclude known job boards and staffing keywords
+    const badKeywords=["staffing","recrui","headhunt","talent agency","job board","employment agency","manpower","adecco","randstad","hays ","michael page","robert half","kelly services","indeed","glassdoor","ziprecruiter","monster.com","totaljobs","reed.co","reed.com","rpo ","hr outsourc"];
+    if(badKeywords.some(k=>name.includes(k)||site.includes(k)))return true;
+    if(EXCLUDE_INDUSTRIES.some(k=>ind.includes(k)))return true;
+    return false;
+  }
+
   async function search(){
     if(!canSearch)return;setLoading(true);setResults([]);setErr("");
     const sig=sigs.length?sigs.join(", "):"actively hiring or growing";
@@ -858,7 +872,11 @@ function Discover({leads,onSave,onBatchSave,onEnrich,onOutreach,cu,niches:dynNic
     function saveResults(parsed,label){
       if(!parsed?.length){setErr("Could not parse results. Try again.");setLoading(false);return;}
       const isValidWebsite=w=>w&&w.length>3&&w.includes(".")&&!w.includes(" ");
-      const fresh=parsed.filter(r=>isValidWebsite(r.website)&&!leads.some(l=>l.name===r.name));
+      const fresh=parsed.filter(r=>
+        isValidWebsite(r.website)&&
+        !leads.some(l=>l.name===r.name)&&
+        !isExcludedCompany(r)  // exclude job boards and recruitment firms
+      );
       if(parsed.length>0&&fresh.length===0){setErr("All results already exist or have unverifiable websites. Try a different search.");setLoading(false);return;}
       const enriched=fresh.map(r=>({...r,website:r.website.replace(/https?:\/\//,"").replace(/^www\./,"").replace(/\/.*/,"").toLowerCase().trim(),searchMode:mode,searchLabel:label||searchLabel}));
       if(enriched.length){setResults(enriched);onBatchSave(enriched);}
@@ -880,6 +898,7 @@ Rules:
 - Each must have a verifiable recent signal with month + year
 - CRITICAL: Only include companies where you know the real website URL with certainty. If unsure of the domain, omit that company entirely.
 - The website field must be a clean domain like "company.com" — no https://, no www., no paths.
+- ${EXCLUDE_RULE}
 - Output ONLY a raw JSON array, no markdown fences
 
 [{"name":"","industry":"","size":"","location":"","website":"company.com","signal":"what happened + Month YYYY","fitScore":82,"fitReason":"why Evolve should call them now"}]`;
@@ -899,6 +918,7 @@ Search the web and find 3 REAL companies that match:
 Rules:
 - Use web search to verify each company is real and has a genuine recent signal
 - Only include companies with a verified real website domain
+- ${EXCLUDE_RULE}
 - Output ONLY a raw JSON array
 
 [{"name":"","industry":"","size":"","location":"","website":"company.com","signal":"what happened + Month YYYY","fitScore":82,"fitReason":"why Evolve should call them now"}]`;
@@ -929,6 +949,7 @@ Rules:
 - One entry per company, exactly as named above
 - signal: most recent known hiring/growth/funding news with month+year if known
 - fitScore: 60-95
+- ${EXCLUDE_RULE}
 - Output ONLY valid JSON array, no markdown, no explanation
 
 [{"name":"","signal":"","fitScore":80,"fitReason":""}]`;
@@ -977,6 +998,7 @@ Rules:
         // Minimal prompt to reduce tokens and force JSON output
         const prompt=`Extract B2B companies from these search results for Evolve ESolutions (IT/HR/Healthcare recruitment).
 Target: ${target}. Location: ${loc||"USA"}.${excludeClause}
+${EXCLUDE_RULE}
 
 ${snippets}
 
