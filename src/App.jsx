@@ -189,6 +189,20 @@ async function apolloEnrichCompany(domain,apiKey){
   if(!apiKey)throw new Error("No Apollo API key");
   return apolloProxy(apiKey,`/api/v1/organizations/enrich?domain=${domain}`);
 }
+async function apolloSearchOrgs(industry,size,location,apiKey){
+  if(!apiKey)throw new Error("No Apollo API key");
+  // Map our size labels to Apollo employee ranges
+  const sizeMap={"Startup (1–50)":{min:1,max:50},"SMB (51–250)":{min:51,max:250},"Mid-market (251–1000)":{min:251,max:1000},"Enterprise (1000+)":{min:1000,max:100000}};
+  const sizeRange=size?sizeMap[size]:null;
+  const body={
+    page:1,per_page:5,
+    q_organization_keyword_tags:[industry],
+    ...(location?{q_organization_locations:[location]}:{}),
+    ...(sizeRange?{organization_num_employees_ranges:[`${sizeRange.min},${sizeRange.max}`]}:{}),
+  };
+  return apolloProxy(apiKey,"/api/v1/organizations/search",body);
+}
+
 async function apolloFindContacts(domain,apiKey){
   if(!apiKey)throw new Error("No Apollo API key");
   // Step 1: Search for decision makers at this domain
@@ -653,7 +667,7 @@ function NicheIndustryManager({niches,industries,onSaveNiches,onSaveIndustries,s
 // ══ SETTINGS (admin only) ══
 function SettingsView({settings,onSave,users,onAdd,onRemove,onPwReset,cu,niches,industries,onSaveNiches,onSaveIndustries}){
   const [settingsTab,setSettingsTab]=useState("keys");
-  const [f,setF]=useState({anthropicKey:settings.anthropicKey||"",elevenLabsKey:settings.elevenLabsKey||"",elevenLabsVoiceId:settings.elevenLabsVoiceId||"pNInz6obpgDQGcFmaJgB",supabaseUrl:settings.supabaseUrl||"",supabaseKey:settings.supabaseKey||"",apolloKey:settings.apolloKey||"",instantlyV2Key:settings.instantlyV2Key||""});
+  const [f,setF]=useState({anthropicKey:settings.anthropicKey||"",elevenLabsKey:settings.elevenLabsKey||"",elevenLabsVoiceId:settings.elevenLabsVoiceId||"pNInz6obpgDQGcFmaJgB",supabaseUrl:settings.supabaseUrl||"",supabaseKey:settings.supabaseKey||"",apolloKey:settings.apolloKey||"",instantlyV2Key:settings.instantlyV2Key||"",serpKey:settings.serpKey||"",hunterKey:settings.hunterKey||""});
   const [saved,setSaved]=useState(false);
   const [nu,setNu]=useState({username:"",displayName:"",title:"",email:"",phone:"",password:""});
   const [addErr,setAddErr]=useState("");
@@ -697,6 +711,10 @@ function SettingsView({settings,onSave,users,onAdd,onRemove,onPwReset,cu,niches,
               <p className="text-xs text-amber-600">Go to Instantly → Settings → API Keys → Create API Key → select scopes: campaigns:all + leads:all → copy the key below.</p>
             </div>
             <F lbl="Instantly.ai API key (v2)" k="instantlyV2Key" ph="inst_v2_..." secret hint="Must be a v2 key — v1 keys will return Unauthorized"/>
+            <div className="border-t border-slate-100 my-4"/>
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Discover Enhancement</p>
+            <F lbl="SerpAPI key" k="serpKey" ph="..." secret hint="serpapi.com → Dashboard → API Key — enables real Google search results in Discover ($50/mo, 5k searches)"/>
+            <F lbl="Hunter.io API key" k="hunterKey" ph="..." secret hint="hunter.io → API → API Key — verifies contact emails before pushing to Instantly (free 25/mo, $49/mo after)"/>
             <button onClick={saveKeys} className="w-full py-2.5 rounded-xl bg-slate-800 text-white text-sm font-medium hover:bg-slate-700 flex items-center justify-center gap-2">{saved?<><CheckCircle2 size={14}/>Saved!</>:<><Key size={14}/>Save API keys</>}</button>
           </div>
           <div className="bg-amber-50 border border-amber-100 rounded-2xl p-5">
@@ -768,6 +786,7 @@ function Discover({leads,onSave,onBatchSave,onEnrich,onOutreach,cu,niches:dynNic
   const nicheList=dynNiches||NICHES;
   const industryList=dynIndustries||INDUSTRIES;
   const [mode,setMode]=useState("industry");
+  const [src,setSrc]=useState("ai"); // ai | web | apollo
   const [industry,setIndustry]=useState("");
   const [niche,setNiche]=useState("");
   const [subNiche,setSubNiche]=useState("");
@@ -792,10 +811,24 @@ function Discover({leads,onSave,onBatchSave,onEnrich,onOutreach,cu,niches:dynNic
     const sixMonthsAgo=new Date(now);sixMonthsAgo.setMonth(now.getMonth()-6);
     const sinceDate=sixMonthsAgo.toLocaleDateString("en-US",{month:"long",year:"numeric"});
     const currentDate=now.toLocaleDateString("en-US",{month:"long",year:"numeric"});
-    // Existing leads to exclude
     const existingNames=leads.map(l=>l.name).filter(Boolean);
     const excludeClause=existingNames.length>0?`\nEXCLUDE these companies (already in our leads): ${existingNames.join(", ")}`:""
-    const prompt=`You are a B2B sales researcher for Evolve ESolutions (IT/HR/Healthcare/Legal/Financial Services recruitment, Pleasanton CA).
+
+    // ── Helper: save results ──
+    function saveResults(parsed,label){
+      if(!parsed?.length){setErr("Could not parse results. Try again.");setLoading(false);return;}
+      const isValidWebsite=w=>w&&w.length>3&&w.includes(".")&&!w.includes(" ");
+      const fresh=parsed.filter(r=>isValidWebsite(r.website)&&!leads.some(l=>l.name===r.name));
+      if(parsed.length>0&&fresh.length===0){setErr("All results already exist or have unverifiable websites. Try a different search.");setLoading(false);return;}
+      const enriched=fresh.map(r=>({...r,website:r.website.replace(/https?:\/\//,"").replace(/^www\./,"").replace(/\/.*/,"").toLowerCase().trim(),searchMode:mode,searchLabel:label||searchLabel}));
+      if(enriched.length){setResults(enriched);onBatchSave(enriched);}
+      else setErr("All results already exist in your leads. Try a different search.");
+    }
+
+    try{
+      // ── Mode 1: AI Only — Claude training knowledge ──
+      if(src==="ai"){
+        const prompt=`You are a B2B sales researcher for Evolve ESolutions (IT/HR/Healthcare/Legal/Financial Services recruitment, Pleasanton CA).
 
 Find exactly 3 real companies matching:
 - ${target}
@@ -805,43 +838,99 @@ Find exactly 3 real companies matching:
 Rules:
 - Return EXACTLY 3 companies (fewer if not enough match)
 - Each must have a verifiable recent signal with month + year
-- CRITICAL: Only include companies where you know the real website URL with certainty (e.g. "taktile.com", "lattice.com"). If you are not sure of the real domain, omit that company entirely — do NOT guess or construct a domain from the company name.
+- CRITICAL: Only include companies where you know the real website URL with certainty. If unsure of the domain, omit that company entirely.
 - The website field must be a clean domain like "company.com" — no https://, no www., no paths.
-- Do not return companies already listed in EXCLUDE above
-- Output ONLY a raw JSON array, no markdown fences, no explanation
+- Output ONLY a raw JSON array, no markdown fences
 
-[{"name":"Company Name","industry":"","size":"","location":"","website":"company.com","signal":"what happened + Month YYYY","fitScore":82,"fitReason":"why Evolve should call them now"}]`;
+[{"name":"","industry":"","size":"","location":"","website":"company.com","signal":"what happened + Month YYYY","fitScore":82,"fitReason":"why Evolve should call them now"}]`;
+        const t=await ai(prompt,false,800);
+        const strategies=[()=>JSON.parse(t.trim()),()=>JSON.parse(t.replace(/\`\`\`json\n?/g,"").replace(/\`\`\`\n?/g,"").trim()),()=>{const m=t.match(/\[[\s\S]*?\]/);return m?JSON.parse(m[0]):null;},()=>{const m=t.match(/\[\s*\{[\s\S]*?\}\s*\]/);return m?JSON.parse(m[0]):null;}];
+        let parsed=null;for(const fn of strategies){try{const r=fn();if(Array.isArray(r)&&r.length){parsed=r;break;}}catch{}}
+        saveResults(parsed);
+      }
 
-    try{
-      const t=await ai(prompt,false,800); // no web search — avoids rate limit, Claude knows companies well
-      // Robust JSON extraction — try multiple strategies
-      let parsed=null;
-      const strategies=[
-        ()=>JSON.parse(t.trim()),
-        ()=>JSON.parse(t.replace(/```json\n?/g,"").replace(/```\n?/g,"").trim()),
-        ()=>{const m=t.match(/\[[\s\S]*?\]/);return m?JSON.parse(m[0]):null;},
-        ()=>{const m=t.match(/\[\s*\{[\s\S]*?\}\s*\]/);return m?JSON.parse(m[0]):null;},
-      ];
-      for(const fn of strategies){try{const r=fn();if(Array.isArray(r)&&r.length){parsed=r;break;}}catch{}}
-      if(parsed?.length){
-        // Filter: must have a real website, and not already a lead
-        const isValidWebsite=w=>w&&w.length>3&&w.includes(".")&&!w.includes(" ");
-        const fresh=parsed.filter(r=>
-          isValidWebsite(r.website) &&
-          !leads.some(l=>l.name===r.name)
-        );
-        if(parsed.length>0&&fresh.length===0){
-          setErr("All results either already exist in your leads or have unverifiable websites. Try a different search.");
-          setLoading(false);return;
-        }
-        const enriched=fresh.map(r=>({...r,website:r.website.replace(/https?:\/\//,"").replace(/^www\./,"").replace(/\/.*/,"").toLowerCase().trim(),searchMode:mode,searchLabel}));
-        if(enriched.length){
-          setResults(enriched);
-          onBatchSave(enriched);
-        } else {
-          setErr("All results already exist in your leads. Try a different search.");
-        }
-      } else setErr("Could not parse results. Try again.");
+      // ── Mode 2: AI + Web Search — real-time signals ──
+      else if(src==="web"){
+        const prompt=`You are a B2B sales researcher for Evolve ESolutions (IT/HR/Healthcare/Legal/Financial Services recruitment, Pleasanton CA).
+Search the web and find 3 REAL companies that match:
+- ${target}
+- Size: ${size||"any"} | Location: ${loc||"any"} | Signal: ${sig}
+- Buying signal must be from the last 6 months — use web search to verify recency${excludeClause}
+
+Rules:
+- Use web search to verify each company is real and has a genuine recent signal
+- Only include companies with a verified real website domain
+- Output ONLY a raw JSON array
+
+[{"name":"","industry":"","size":"","location":"","website":"company.com","signal":"what happened + Month YYYY","fitScore":82,"fitReason":"why Evolve should call them now"}]`;
+        const t=await ai(prompt,true,1200); // web search ON
+        const strategies=[()=>JSON.parse(t.trim()),()=>JSON.parse(t.replace(/\`\`\`json\n?/g,"").replace(/\`\`\`\n?/g,"").trim()),()=>{const m=t.match(/\[[\s\S]*?\]/);return m?JSON.parse(m[0]):null;},()=>{const m=t.match(/\[\s*\{[\s\S]*?\}\s*\]/);return m?JSON.parse(m[0]):null;}];
+        let parsed=null;for(const fn of strategies){try{const r=fn();if(Array.isArray(r)&&r.length){parsed=r;break;}}catch{}}
+        saveResults(parsed);
+      }
+
+      // ── Mode 3: Apollo — verified company database ──
+      else if(src==="apollo"){
+        const s=await sg(S_SETTINGS);
+        const apolloKey=s?.apolloKey;
+        if(!apolloKey){setErr("Add Apollo API key in Settings to use Apollo search.");setLoading(false);return;}
+        const searchTerm=mode==="industry"?industry:`${selectedNiche.label}${subNiche?` ${subNiche}`:""}`;
+        const orgRes=await apolloSearchOrgs(searchTerm,size,loc,apolloKey);
+        const orgs=(orgRes?.organizations||[]).slice(0,5);
+        if(!orgs.length){setErr("No companies found in Apollo for those criteria. Try broader search terms.");setLoading(false);return;}
+        // Use Claude to add signal context and fit scores for each org
+        const orgList=orgs.map(o=>`${o.name} (${o.industry||"unknown industry"}, ${o.estimated_num_employees||"?"} employees, ${o.primary_domain||"?"})`).join("\n");
+        const prompt=`You are a B2B sales researcher for Evolve ESolutions (IT/HR/Healthcare/Legal/Financial Services recruitment, Pleasanton CA).
+These companies were found in a verified database. Research each and add a recent buying signal and fit assessment.
+Target criteria: ${target} | Signal type: ${sig}
+
+Companies:
+${orgList}
+
+For each company, output ONLY a raw JSON array:
+[{"name":"exact name from list","industry":"","size":"","location":"","website":"primary domain","signal":"specific recent signal with month+year or best known recent news","fitScore":75,"fitReason":"why Evolve should call them now"}]`;
+        const t=await ai(prompt,true,1000); // web search ON to find signals
+        const strategies=[()=>JSON.parse(t.trim()),()=>JSON.parse(t.replace(/\`\`\`json\n?/g,"").replace(/\`\`\`\n?/g,"").trim()),()=>{const m=t.match(/\[[\s\S]*?\]/);return m?JSON.parse(m[0]):null;},()=>{const m=t.match(/\[\s*\{[\s\S]*?\}\s*\]/);return m?JSON.parse(m[0]):null;}];
+        let parsed=null;for(const fn of strategies){try{const r=fn();if(Array.isArray(r)&&r.length){parsed=r;break;}}catch{}}
+        // Merge with Apollo data for verified domains
+        if(parsed){parsed=parsed.map(p=>{const org=orgs.find(o=>o.name===p.name);return{...p,website:org?.primary_domain||p.website||"",size:org?.estimated_num_employees?`${org.estimated_num_employees} employees`:p.size,location:org?.city&&org?.state?`${org.city}, ${org.state}`:p.location};})}
+        saveResults(parsed,`Apollo: ${searchTerm}`);
+      }
+
+      // ── Mode 4: SerpAPI — Real Google results ──
+      else if(src==="serp"){
+        const s=await sg(S_SETTINGS);
+        const serpKey=s?.serpKey;
+        if(!serpKey){setErr("Add SerpAPI key in Settings → Discover Enhancement to use SerpAPI search.");setLoading(false);return;}
+        const searchTerm=mode==="industry"?industry:`${selectedNiche.label}${subNiche?` ${subNiche}`:""}`;
+        const sig2=sigs.length?sigs.join(" OR "):"hiring OR funded OR expanding";
+        const query=`${searchTerm} company ${sig2} ${loc||""} ${size||""} site:linkedin.com OR site:crunchbase.com OR site:techcrunch.com 2025`;
+        const r=await fetch("/api/serp",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query,apiKey:serpKey,num:8})});
+        const serpData=await r.json();
+        if(!r.ok){setErr(`SerpAPI error: ${serpData.error}`);setLoading(false);return;}
+        const snippets=(serpData.organic||[]).map(o=>`${o.title}: ${o.snippet} [${o.domain}]`).join("\n");
+        if(!snippets){setErr("No results found from SerpAPI. Try different search terms.");setLoading(false);return;}
+        // Claude extracts companies from real search results
+        const prompt=`You are a B2B sales researcher for Evolve ESolutions (IT/HR/Healthcare/Legal/Financial Services recruitment, Pleasanton CA).
+
+Extract and qualify companies from these REAL Google search results:
+${snippets}
+
+Target: ${target} | Signal: ${sig} | Location: ${loc||"any"} | Size: ${size||"any"}${excludeClause}
+
+Rules:
+- Only extract companies clearly visible in the search results above
+- Each must have a genuine verifiable signal from the search results
+- Only include if you can confirm the website domain from the results
+- Output ONLY a raw JSON array
+
+[{"name":"","industry":"","size":"","location":"","website":"company.com","signal":"specific signal from search results + Month YYYY","fitScore":80,"fitReason":"why Evolve should call them now"}]`;
+        const t=await ai(prompt,false,1000);
+        const strategies=[()=>JSON.parse(t.trim()),()=>JSON.parse(t.replace(/\`\`\`json\n?/g,"").replace(/\`\`\`\n?/g,"").trim()),()=>{const m=t.match(/\[[\s\S]*?\]/);return m?JSON.parse(m[0]):null;},()=>{const m=t.match(/\[\s*\{[\s\S]*?\}\s*\]/);return m?JSON.parse(m[0]):null;}];
+        let parsed=null;for(const fn of strategies){try{const r=fn();if(Array.isArray(r)&&r.length){parsed=r;break;}}catch{}}
+        saveResults(parsed,`SerpAPI: ${searchTerm}`);
+      }
+
     }catch(e){setErr(`Search failed: ${e.message||"Check API key in Settings."}`);}
     setLoading(false);
   }
@@ -852,6 +941,23 @@ Rules:
       {myCount>0&&<div className="flex items-center gap-2 bg-indigo-50 border border-indigo-100 rounded-xl px-4 py-2.5 mb-5"><CheckCircle2 size={14} className="text-indigo-500"/><span className="text-xs font-medium text-indigo-700">You have {myCount} saved lead{myCount!==1?"s":""}.</span></div>}
 
       <div className="bg-white rounded-2xl border border-slate-200 p-6 mb-6">
+        {/* Source selector */}
+        <div className="flex items-center gap-2 mb-4">
+          <span className="text-xs text-slate-400 font-medium">Source:</span>
+          {[
+            {k:"ai",    icon:"🤖", label:"AI Only",   tip:"Claude training knowledge — fast, free"},
+            {k:"web",   icon:"🌐", label:"AI + Web",  tip:"Real-time web search — verified recent signals"},
+            {k:"apollo",icon:"🔍", label:"Apollo",    tip:"Verified company database — most accurate"},
+            {k:"serp",  icon:"🔎", label:"SerpAPI",   tip:"Real Google results — best buying signals (needs SerpAPI key)"},
+          ].map(s=>(
+            <button key={s.k} onClick={()=>setSrc(s.k)} title={s.tip}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${src===s.k?"bg-slate-800 text-white border-slate-800":"border-slate-200 text-slate-600 hover:border-slate-400 bg-white"}`}>
+              <span>{s.icon}</span>{s.label}
+            </button>
+          ))}
+          <span className="text-xs text-slate-400 ml-1">{src==="ai"?"Uses Claude's training data":src==="web"?"Searches the web for recent signals":src==="apollo"?"Searches Apollo's verified company database":"Real Google search results — freshest buying signals"}</span>
+        </div>
+
         {/* Mode toggle */}
         <div className="flex items-center gap-2 mb-5 p-1 bg-slate-100 rounded-xl w-fit">
           <button onClick={()=>switchMode("industry")} className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all ${mode==="industry"?"bg-white text-slate-800 shadow-sm":"text-slate-500 hover:text-slate-700"}`}>
@@ -1297,7 +1403,7 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
   },[company.name,iPushed]);
   const aRefs=useRef({});
   const instantlyKey=settings?.instantlyV2Key||settings?.instantlyKey||"";
-  useEffect(()=>{sg(`enr_${company.name.toLowerCase().replace(/\s+/g,"_")}`).then(d=>{if(d?.keyContacts){setLiC(d.keyContacts.filter(c=>c.linkedin&&c.linkedin.length>5));setPhC(d.keyContacts.filter(c=>c.phone&&c.phone!=="Not found"));}});},[company.name]);
+  useEffect(()=>{sg(`enr_${company.name.toLowerCase().replace(/\s+/g,"_")}`).then(d=>{if(d?.keyContacts){setLiC(d.keyContacts.filter(c=>c.linkedin&&c.linkedin.length>5));setPhC(d.keyContacts);}});},[company.name]);
   const E=`Evolve ESolutions — IT, HR, Healthcare, Financial Services, Legal recruitment, Pleasanton CA. 24–48hr screened candidates. Passive talent. No placement no fee. 1–3 day onboarding.`;
   const iMap={"Technology / SaaS":"IT/software","Financial Services":"finance/compliance","Healthcare":"healthcare/clinical","Legal":"legal/paralegal","Manufacturing":"engineering/ops","E-commerce / Retail":"tech/ops","Construction":"project management","Professional Services":"professional/admin","Media & Marketing":"creative/marketing","Logistics & Supply Chain":"ops/tech"};
   const spec=iMap[company.industry]||company.industry;
@@ -1383,9 +1489,29 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
       }
       const allContacts=(enriched?.keyContacts||[]).map(ct=>({...ct,company:company.name}));
       // Clean legacy "Not found" strings and filter to valid emails only
-      const contacts=allContacts
+      const rawContacts=allContacts
         .map(ct=>({...ct,email:(ct.email&&ct.email!=="Not found"&&ct.email.includes("@"))?ct.email:null}))
         .filter(ct=>ct.email);
+
+      // Hunter.io email verification — skip if no key
+      let contacts=rawContacts;
+      const hunterKey=settings?.hunterKey;
+      if(hunterKey&&rawContacts.length){
+        setIErr("Verifying emails with Hunter.io…");
+        const verified=await Promise.all(rawContacts.map(async ct=>{
+          try{
+            const r=await fetch("/api/hunter",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:ct.email,apiKey:hunterKey})});
+            const d=await r.json();
+            // valid or accept_all = keep; invalid = drop; unknown = keep with warning
+            if(d.status==="invalid"){return null;}
+            return {...ct,hunterStatus:d.status,hunterScore:d.score};
+          }catch{return ct;} // if Hunter fails, keep contact anyway
+        }));
+        contacts=verified.filter(Boolean);
+        const dropped=rawContacts.length-contacts.length;
+        if(dropped>0)console.log(`Hunter.io: dropped ${dropped} invalid email(s)`);
+        setIErr(""); // clear verification message
+      }
       const skipped=allContacts.length-contacts.length;
       setISkipped(skipped);
       setISent(contacts.length);
@@ -1411,7 +1537,26 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
   async function genLi(c,i){setLiLoad(p=>({...p,[i]:true}));const t=await ai(`LinkedIn connection note from Evolve ESolutions to ${c.name}, ${c.title} at ${company.name}. Context: ${company.signal}. Max 300 chars. Warm, peer-to-peer, specific hook, no clichés. Return ONLY note text.`).catch(()=>"Error.");setLiMsg(p=>({...p,[i]:t.trim()}));setLiLoad(p=>({...p,[i]:false}));}
   async function genScript(c,i){setLScript(p=>({...p,[i]:true}));const t=await ai(`Cold call script for ${c.name}, ${c.title} at ${company.name}. Evolve ESolutions — IT/HR/Healthcare recruitment, 24–48hr, passive talent, no-fee. Signal: ${company.signal}. Natural, confident. [OPENING][IF ENGAGE][OBJECTION: PSL][CLOSE]. 200-280 words.`).catch(()=>"Error.");setScripts(p=>({...p,[i]:t}));setPhTab(p=>({...p,[i]:"script"}));setLScript(p=>({...p,[i]:false}));}
   async function genText(c,i){setLText(p=>({...p,[i]:true}));const t=await ai(`SMS follow-up from Evolve ESolutions to ${c.name} at ${company.name} after missed call. Context: ${company.signal}. Max 160 chars. Human not marketing. Identify yourself. One value hook. Light CTA. Return ONLY SMS text.`).catch(()=>"Error.");setTexts(p=>({...p,[i]:t.trim()}));setPhTab(p=>({...p,[i]:"text"}));setLText(p=>({...p,[i]:false}));}
-  async function genVoice(i){const s=await sg(S_SETTINGS);const key=s?.elevenLabsKey;if(!key){alert("Add ElevenLabs API key in Settings.");return;}setLVoice(p=>({...p,[i]:true}));try{const blob=await tts(scripts[i].replace(/\[.*?\]/g,""),key,s.elevenLabsVoiceId);const url=URL.createObjectURL(blob);setAudios(p=>({...p,[i]:url}));setPhTab(p=>({...p,[i]:"voice"}));}catch(e){alert(`Voice error: ${e.message}`);}setLVoice(p=>({...p,[i]:false}));}
+  async function genVoice(c,i){
+    const s=await sg(S_SETTINGS);
+    const key=s?.elevenLabsKey;
+    if(!key){alert("Add ElevenLabs API key in Settings → API Keys tab.");return;}
+    setLVoice(p=>({...p,[i]:true}));
+    try{
+      // Auto-generate script if none yet
+      let script=scripts[i];
+      if(!script){
+        script=await ai(`Cold call script for ${c.name}, ${c.title} at ${company.name}. Evolve ESolutions — IT/HR/Healthcare recruitment, 24–48hr, passive talent, no-fee. Signal: ${company.signal}. Natural, confident. [OPENING][IF ENGAGE][OBJECTION: PSL][CLOSE]. 200-280 words.`).catch(()=>"");
+        if(script)setScripts(p=>({...p,[i]:script}));
+      }
+      if(!script){alert("Could not generate script. Try again.");setLVoice(p=>({...p,[i]:false}));return;}
+      const blob=await tts(script.replace(/\[.*?\]/g,""),key,s.elevenLabsVoiceId);
+      const url=URL.createObjectURL(blob);
+      setAudios(p=>({...p,[i]:url}));
+      setPhTab(p=>({...p,[i]:"voice"}));
+    }catch(e){alert(`Voice error: ${e.message}`);}
+    setLVoice(p=>({...p,[i]:false}));
+  }
   function togPlay(i){const a=aRefs.current[i];if(!a)return;if(playing[i]){a.pause();setPlaying(p=>({...p,[i]:false}));}else{a.play();setPlaying(p=>({...p,[i]:true}));a.onended=()=>setPlaying(p=>({...p,[i]:false}));}}
   function copy(v,k){navigator.clipboard.writeText(v);setPhCp(k);setTimeout(()=>setPhCp(""),2000);}
 
@@ -1494,16 +1639,16 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
       </div>
 
       {/* Phone */}
-      {phC.length>0&&<div className="bg-white rounded-2xl border border-slate-200 overflow-hidden mt-6">
-        <button onClick={()=>setPhOpen(p=>!p)} className="w-full flex items-center justify-between px-5 py-4 hover:bg-slate-50"><div className="flex items-center gap-2"><Phone size={15} className="text-emerald-600"/><span className="text-sm font-semibold text-slate-800">Phone outreach</span><span className="text-xs text-slate-400 ml-1">· {phC.length} contact{phC.length!==1?"s":""} with numbers</span></div><svg className={`text-slate-400 transition-transform ${phOpen?"rotate-180":""}`} width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2"><path d="M2 5l5 5 5-5"/></svg></button>
-        {phOpen&&<div className="px-5 pb-5 border-t border-slate-100"><p className="text-xs text-slate-500 mt-4 mb-4">Call script, ElevenLabs voice note, and SMS follow-up.</p>
+      {<div className="bg-white rounded-2xl border border-slate-200 overflow-hidden mt-6">
+        <button onClick={()=>setPhOpen(p=>!p)} className="w-full flex items-center justify-between px-5 py-4 hover:bg-slate-50"><div className="flex items-center gap-2"><Phone size={15} className="text-emerald-600"/><span className="text-sm font-semibold text-slate-800">Phone outreach</span><span className="text-xs text-slate-400 ml-1">· {phC.length} contact{phC.length!==1?"s":""}</span></div><svg className={`text-slate-400 transition-transform ${phOpen?"rotate-180":""}`} width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2"><path d="M2 5l5 5 5-5"/></svg></button>
+        {phOpen&&<div className="px-5 pb-5 border-t border-slate-100"><p className="text-xs text-slate-500 mt-4 mb-4">Call script, <span className="text-indigo-600 font-medium">ElevenLabs voice note</span>, and SMS follow-up. Voice note auto-generates a script if you haven't yet.</p>
           <div className="space-y-5">{phC.map((c,i)=><div key={i} className="border border-slate-100 rounded-xl overflow-hidden">
             <div className="flex items-center gap-3 px-4 py-3 bg-slate-50 border-b border-slate-100"><div className={`w-9 h-9 rounded-xl flex items-center justify-center font-semibold text-sm flex-shrink-0 ${PALETTES[i%PALETTES.length]}`}>{c.name.split(" ").slice(0,2).map(w=>w[0]).join("").toUpperCase()}</div><div className="flex-1"><div className="text-sm font-semibold text-slate-800">{c.name}</div><div className="flex items-center gap-1.5"><span className="text-xs text-slate-500">{c.title}</span>{c.phoneType&&c.phoneType!=="Not found"&&<CtBadge label={c.phoneType}/>}</div></div><a href={`tel:${c.phone.replace(/\s/g,"")}`} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-medium hover:bg-emerald-700"><Phone size={12}/>{c.phone}</a></div>
             <div className="p-4">
               <div className="flex gap-2 mb-4 flex-wrap">
                 <button onClick={()=>genScript(c,i)} disabled={lScript[i]} className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border transition-all ${phTab[i]==="script"?"bg-slate-800 text-white border-slate-800":"border-slate-200 text-slate-600 hover:border-slate-400"}`}>{lScript[i]?<Loader2 size={12} className="animate-spin"/>:<FileText size={12}/>}{lScript[i]?"Writing…":"Call script"}</button>
                 <button onClick={()=>genText(c,i)} disabled={lText[i]} className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border transition-all ${phTab[i]==="text"?"bg-slate-800 text-white border-slate-800":"border-slate-200 text-slate-600 hover:border-slate-400"}`}>{lText[i]?<Loader2 size={12} className="animate-spin"/>:<Mail size={12}/>}{lText[i]?"Writing…":"SMS"}</button>
-                {scripts[i]&&<button onClick={()=>genVoice(i)} disabled={lVoice[i]} className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border transition-all ${phTab[i]==="voice"?"bg-indigo-600 text-white border-indigo-600":"border-slate-200 text-slate-600 hover:border-slate-400"}`}>{lVoice[i]?<Loader2 size={12} className="animate-spin"/>:<Mic size={12}/>}{lVoice[i]?"Generating…":"Voice note"}</button>}
+                <button onClick={()=>genVoice(c,i)} disabled={lVoice[i]} className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border transition-all ${phTab[i]==="voice"?"bg-indigo-600 text-white border-indigo-600":"border-indigo-50 text-indigo-700 border-indigo-200 hover:border-indigo-400"}`}>{lVoice[i]?<Loader2 size={12} className="animate-spin"/>:<Mic size={12}/>}{lVoice[i]?"Generating…":"Voice note"}</button>
                 {(scripts[i]||texts[i])&&<button onClick={()=>copy(phTab[i]==="text"?texts[i]:scripts[i],`ph${i}`)} className="ml-auto flex items-center gap-1 text-xs text-slate-500 px-3 py-2 rounded-lg border border-slate-200"><Copy size={11}/>{phCp===`ph${i}`?"Copied!":"Copy"}</button>}
               </div>
               {phTab[i]==="script"&&scripts[i]&&<pre className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed bg-slate-50 rounded-xl p-4 border border-slate-100" style={{fontFamily:"inherit"}}>{scripts[i]}</pre>}
