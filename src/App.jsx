@@ -317,14 +317,18 @@ async function instantlyCreateCampaign(apiKey,campaignName,contacts,emailSteps){
   if(validContacts.length){
     const leadsPayload={
       campaign_id:campaignId,
-      leads:validContacts.map(c=>({
-        email:c.email,
-        first_name:(c.name||"").trim().split(" ")[0]||"",
-        last_name:(c.name||"").trim().split(" ").slice(1).join(" ")||"",
-        company_name:c.company||"",
-        phone:c.phone||"",
-        website:c.linkedin||"",
-      })),
+      leads:validContacts.map(c=>{
+        const cleanName=(c.name&&c.name!=="Unknown")?c.name.trim():"";
+        const parts=cleanName.split(" ").filter(Boolean);
+        return {
+          email:c.email,
+          first_name:parts[0]||"",
+          last_name:parts.slice(1).join(" ")||"",
+          company_name:c.company||"",
+          phone:(c.phone&&c.phone!=="Not found")?c.phone:"",
+          website:c.linkedin||"",
+        };
+      }),
     };
     addResult=await instantlyProxy(apiKey,"/api/v2/leads/add",leadsPayload);
     console.log("Instantly leads/add result:",addResult);
@@ -1105,14 +1109,14 @@ Return ONLY valid JSON:
         setLoading(false);return;
       }
       // apolloFindContacts already returns structured contacts — pass through directly
-      // Clean legacy "Not found" strings from older cache entries → null
+      // Clean legacy "Not found"/"Unknown" strings from older cache entries
       const apolloContacts=people.map(p=>({
         ...p,
+        name:(p.name&&p.name!=="Unknown")?p.name.trim():"",
         email:(p.email&&p.email!=="Not found"&&p.email.includes("@"))?p.email:null,
         phone:(p.phone&&p.phone!=="Not found")?p.phone:null,
         phoneType:(p.phoneType&&p.phoneType!=="Not found")?p.phoneType:null,
-        name:(p.name&&p.name!=="Unknown")?p.name:"",
-      })).filter(p=>p.name);
+      })).filter(p=>p.name&&p.email); // only keep contacts with both name and email
       // Merge: keep existing contacts + add Apollo ones, cap at 5
       const existing=(data?.keyContacts||[]).filter(x=>x.source!=="Apollo");
       const combined=[...existing,...apolloContacts].slice(0,5);
