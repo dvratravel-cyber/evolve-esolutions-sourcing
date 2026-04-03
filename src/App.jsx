@@ -5,7 +5,7 @@ import {
   TrendingUp, Users, Globe, Zap, CheckCircle2, BarChart2,
   Target, Trash2, FileText, Settings, Download, Play, Square,
   Key, Database, Mic, LogOut, UserPlus, Shield, User, Eye,
-  EyeOff, Clock, Activity, ChevronDown, ChevronRight, Tag, X, Pencil, Check
+  EyeOff, Clock, Activity, ChevronDown, ChevronRight, Tag, X, Pencil, Check, Send
 } from "lucide-react";
 
 const ANTHROPIC_API   = "https://api.anthropic.com/v1/messages";
@@ -151,10 +151,27 @@ async function sbSaveContacts(url,key,leadName,contacts){
 }
 
 // ── Supabase outreach ──
-async function sbSaveOutreach(url,key,leadName,ownerId,sequenceType,steps,campaignId=null){
+async function sbSaveOutreach(url,key,leadName,ownerId,ownerName,sequenceType,steps,campaignId=null,contactCount=0){
   if(!url||!key)return;
-  const record={lead_name:leadName,owner_id:ownerId,sequence_type:sequenceType,steps,instantly_campaign_id:campaignId||null};
-  await sbReq(`${url}/rest/v1/outreach`,key,"POST",record,true);
+  const record={
+    lead_name:leadName,
+    owner_id:ownerId,
+    owner_name:ownerName||ownerId,
+    sequence_type:sequenceType,
+    steps,
+    instantly_campaign_id:campaignId||null,
+    contact_count:contactCount,
+    pushed_at:campaignId?new Date().toISOString():null,
+    created_at:new Date().toISOString(),
+  };
+  await sbReq(`${url}/rest/v1/outreach`,key,"POST",record);
+}
+
+// ── Supabase: load outreach history for a lead ──
+async function sbLoadOutreach(url,key,leadName){
+  if(!url||!key)return[];
+  const rows=await sbReq(`${url}/rest/v1/outreach?lead_name=eq.${encodeURIComponent(leadName)}&select=*&order=created_at.desc`,key);
+  return rows||[];
 }
 
 // ── Apollo.io enrichment (via Vercel proxy — Apollo blocks direct browser calls) ──
@@ -341,18 +358,35 @@ function H1({title,sub}){return <div className="mb-6"><h1 className="text-xl fon
 function CtBadge({label}){const m={"Work":"bg-blue-50 text-blue-700","Personal":"bg-rose-50 text-rose-700","Direct":"bg-emerald-50 text-emerald-700","Mobile":"bg-violet-50 text-violet-700","Office":"bg-amber-50 text-amber-700","HQ":"bg-slate-100 text-slate-600"};return <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${m[label]||"bg-slate-100 text-slate-500"}`}>{label}</span>;}
 
 // ── Activity Log Panel ──
-function LogPanel({log=[]}){
+function LogPanel({log=[],isOwner=false,isAdmin=false}){
+  if(!isAdmin&&!isOwner)return null;
   const [open,setOpen]=useState(false);
   if(!log.length)return null;
   const fmt=ts=>new Date(ts).toLocaleString("en-US",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"});
   const ic={saved:<Bookmark size={10}/>,enriched:<TrendingUp size={10}/>,discovered:<Search size={10}/>,"outreach generated":<Mail size={10}/>};
+  const getIcon=(action)=>{
+    if(ic[action])return ic[action];
+    if(action.startsWith("pushed to Instantly"))return<Send size={10}/>;
+    return<Activity size={10}/>;
+  };
   return(
     <div className="mt-3 pt-3 border-t border-slate-100">
       <button onClick={()=>setOpen(p=>!p)} className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-600">
         <Activity size={11}/>{log.length} event{log.length!==1?"s":""}
         {open?<ChevronDown size={11}/>:<ChevronRight size={11}/>}
       </button>
-      {open&&<div className="mt-2 space-y-1.5">{[...log].reverse().map((e,i)=><div key={i} className="flex items-center gap-2 text-xs text-slate-500"><span className="w-4 h-4 rounded-full bg-slate-100 flex items-center justify-center flex-shrink-0">{ic[e.action]||<Clock size={10}/>}</span><span className="font-medium text-slate-700">{e.user}</span><span>{e.action}</span><span className="ml-auto text-slate-400 flex-shrink-0">{fmt(e.timestamp)}</span></div>)}</div>}
+      {open&&<div className="mt-2 space-y-2">{[...log].reverse().map((e,i)=>{
+          const isInstantly=e.action.startsWith("pushed to Instantly");
+          return(<div key={i} className={`flex items-start gap-2 text-xs rounded-lg p-2 ${isInstantly?"bg-emerald-50 border border-emerald-100":"bg-slate-50"}`}>
+            <span className={`w-4 h-4 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 ${isInstantly?"bg-emerald-100 text-emerald-600":"bg-slate-200 text-slate-500"}`}>{getIcon(e.action)}</span>
+            <div className="flex-1 min-w-0">
+              <span className="font-semibold text-slate-700">{e.user}</span>
+              <span className="text-slate-400 mx-1">·</span>
+              <span className={`break-words ${isInstantly?"text-emerald-800 font-medium":"text-slate-500"}`}>{e.action}</span>
+            </div>
+            <span className="text-slate-400 flex-shrink-0 whitespace-nowrap">{fmt(e.timestamp)}</span>
+          </div>);
+        })}</div>}
     </div>
   );
 }
@@ -938,7 +972,7 @@ function Saved({leads,onSave,onEnrich,onOutreach,cu}){
                   <button onClick={()=>onSave(c)} className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 text-slate-500 rounded-lg text-xs hover:border-red-200 hover:text-red-500"><Trash2 size={12}/>Remove</button>
                 </div>
               </div>
-              {isAdmin&&<LogPanel log={c.activityLog||[]}/>}
+              <LogPanel log={c.activityLog||[]} isOwner={cu.username===c.ownerId} isAdmin={isAdmin}/>
             </div>
           ))}
         </div>
@@ -948,7 +982,7 @@ function Saved({leads,onSave,onEnrich,onOutreach,cu}){
 }
 
 // ══ ENRICH ══
-function Enrich({company,idx,onBack,onOutreach,onSave,isSaved,cu,settings}){
+function Enrich({company,idx,onBack,onOutreach,onSave,isSaved,cu,settings,onLogAct=()=>{}}){
   const [loading,setLoading]=useState(false);const [data,setData]=useState(null);const [err,setErr]=useState("");const [cached,setCached]=useState(false);
   const MAX_CONTACTS=10;
   const [showAddContact,setShowAddContact]=useState(false);
@@ -1032,7 +1066,7 @@ CRITICAL RULES FOR CONTACTS:
 5. Phone type: "Direct", "Mobile", "Office", or "HQ". Null if no phone found.
 Return ONLY valid JSON:
 {"description":"2-sentence overview","founded":"year","headcount":"estimate","revenue":"estimate or Private","funding":"round or Bootstrapped","recentNews":["3 items with dates"],"techStack":["3-5 tech"],"hiringRoles":["3-4 areas"],"keyContacts":[{"name":"","title":"","email":null,"emailType":null,"phone":null,"phoneType":null,"linkedin":"","source":"AI","emailVerified":false},{"name":"","title":"","email":null,"emailType":null,"phone":null,"phoneType":null,"linkedin":"","source":"AI","emailVerified":false}],"painPoints":["2-3 points"],"approachAngle":"one specific angle for Evolve ESolutions","enrichmentSource":"AI"}`;
-    try{const t=await ai(prompt,false);const clean=t.replace(/```json\n?/g,"").replace(/```\n?/g,"").trim();const m=clean.match(/\{[\s\S]*\}/);if(m){const d=JSON.parse(m[0]);setData(d);await ss(`enr_${slug}`,d);if(sbUrl&&sbKey){sbSaveEnrichment(sbUrl,sbKey,slug,company.name,d);sbSaveContacts(sbUrl,sbKey,company.name,d.keyContacts||[]);}}else setErr("Parse failed. Try again.");}catch(e){setErr(`Enrichment failed: ${e.message}`);}setLoading(false);
+    try{const t=await ai(prompt,false);const clean=t.replace(/```json\n?/g,"").replace(/```\n?/g,"").trim();const m=clean.match(/\{[\s\S]*\}/);if(m){const d=JSON.parse(m[0]);setData(d);await ss(`enr_${slug}`,d);if(sbUrl&&sbKey){sbSaveEnrichment(sbUrl,sbKey,slug,company.name,d);sbSaveContacts(sbUrl,sbKey,company.name,d.keyContacts||[]);}onLogAct(company,`AI enriched by ${cu.displayName}`);}else setErr("Parse failed. Try again.");}catch(e){setErr(`Enrichment failed: ${e.message}`);}setLoading(false);
   }
   async function enrichWithApollo(){
     if(!apolloKey){setErr("Add Apollo API key in Settings first.");return;}
@@ -1068,6 +1102,7 @@ Return ONLY valid JSON:
         sbSaveEnrichment(sbUrl,sbKey,slug,company.name,merged);
         sbSaveContacts(sbUrl,sbKey,company.name,apolloContacts);
       }
+      onLogAct(company,`Apollo enriched by ${cu.displayName} · ${apolloContacts.length} contact${apolloContacts.length!==1?"s":""}${apolloContacts.filter(c=>c.email).length>0?` · ${apolloContacts.filter(c=>c.email).length} with email`:"" }`);
     }catch(e){setErr(`Apollo contact enrichment failed: ${e.message}`);}
     setLoading(false);
   }
@@ -1194,6 +1229,14 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
   const [liC,setLiC]=useState([]);const [liMsg,setLiMsg]=useState({});const [liLoad,setLiLoad]=useState({});const [liCp,setLiCp]=useState("");const [liOpen,setLiOpen]=useState(true);
   const [phC,setPhC]=useState([]);const [scripts,setScripts]=useState({});const [texts,setTexts]=useState({});const [audios,setAudios]=useState({});const [playing,setPlaying]=useState({});const [lScript,setLScript]=useState({});const [lText,setLText]=useState({});const [lVoice,setLVoice]=useState({});const [phTab,setPhTab]=useState({});const [phCp,setPhCp]=useState("");const [phOpen,setPhOpen]=useState(true);
   const [iPushing,setIPushing]=useState(false);const [iPushed,setIPushed]=useState(false);const [iErr,setIErr]=useState("");const [iSkipped,setISkipped]=useState(0);
+  const [history,setHistory]=useState([]);
+  useEffect(()=>{
+    // Load push history from Supabase
+    if(settings?.supabaseUrl&&settings?.supabaseKey){
+      sbLoadOutreach(settings.supabaseUrl,settings.supabaseKey,company.name)
+        .then(rows=>setHistory(rows.filter(r=>r.instantly_campaign_id)));
+    }
+  },[company.name,iPushed]);
   const aRefs=useRef({});
   const instantlyKey=settings?.instantlyV2Key||settings?.instantlyKey||"";
   useEffect(()=>{sg(`enr_${company.name.toLowerCase().replace(/\s+/g,"_")}`).then(d=>{if(d?.keyContacts){setLiC(d.keyContacts.filter(c=>c.linkedin&&c.linkedin.length>5));setPhC(d.keyContacts.filter(c=>c.phone&&c.phone!=="Not found"));}});},[company.name]);
@@ -1254,7 +1297,7 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
       onLogAct(company,"outreach generated");
       // Save to DB
       if(settings?.supabaseUrl&&settings?.supabaseKey){
-        sbSaveOutreach(settings.supabaseUrl,settings.supabaseKey,company.name,cu.username,tmpl.id,[{day:s.day,label:s.label,subject:subj,body}]);
+        sbSaveOutreach(settings.supabaseUrl,settings.supabaseKey,company.name,cu.username,cu.displayName,tmpl.id,[{day:s.day,label:s.label,subject:subj,body}]);
       }
     }catch(e){setContent(`Error: ${e.message||"Check API key in Settings."}`);}
     setLoading(false);
@@ -1274,8 +1317,8 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
       // Use pre-generated steps from state
       const steps=emailSteps.map(s=>generatedSteps[s.label]).filter(Boolean);
       const enriched=await sg(`enr_${company.name.toLowerCase().replace(/\s+/g,"_")}`);
-      // Use data from state (includes manually added/edited contacts) — fallback to localStorage
-      const allContacts=((data?.keyContacts)||enriched?.keyContacts||[]).map(c=>({...c,company:company.name}));
+      // Use contacts from localStorage cache (always kept in sync when contacts are added/edited in Enrich)
+      const allContacts=(enriched?.keyContacts||[]).map(c=>({...c,company:company.name}));
       // Valid email = exists, not null, not placeholder text
       const contacts=allContacts.filter(c=>c.email&&c.email!=="Not found"&&c.email!==null&&c.email.includes("@"));
       const skipped=allContacts.length-contacts.length;
@@ -1283,11 +1326,11 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
       if(!contacts.length){setIErr("No contacts with valid emails found. Add or edit contact emails in the Enrich view first.");setIPushing(false);return;}
       const campaignName=`Evolve — ${company.name} — ${new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`;
       const campaignId=await instantlyCreateCampaign(instantlyKey,campaignName,contacts,steps);
-      onLogAct(company,"pushed to Instantly");
+      onLogAct(company,`pushed to Instantly · ${tmpl.label} · ${contacts.length} contact${contacts.length!==1?"s":""} · ID: ${campaignId}`);
       setIPushed(campaignId);
       // Save full sequence to DB
       if(settings?.supabaseUrl&&settings?.supabaseKey){
-        sbSaveOutreach(settings.supabaseUrl,settings.supabaseKey,company.name,cu.username,tmpl.id,steps,campaignId);
+        sbSaveOutreach(settings.supabaseUrl,settings.supabaseKey,company.name,cu.username,cu.displayName,tmpl.id,steps,campaignId,contacts.length);
       }
     }catch(e){setIErr(`Instantly push failed: ${e.message}`);}
     setIPushing(false);
@@ -1395,6 +1438,36 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
         </div>}
       </div>}
 
+      {/* Campaign Push History */}
+      {history.length>0&&<div className="bg-white rounded-2xl border border-slate-200 mt-4 overflow-hidden">
+        <div className="px-5 py-3 border-b border-slate-100 bg-slate-50 flex items-center gap-2">
+          <Clock size={13} className="text-slate-400"/>
+          <span className="text-xs font-semibold text-slate-700">Campaign push history</span>
+          <span className="text-xs text-slate-400 ml-auto">{history.length} push{history.length!==1?"es":""}</span>
+        </div>
+        <div className="divide-y divide-slate-100">
+          {history.map((h,i)=>(
+            <div key={i} className="px-5 py-3 flex items-start gap-3">
+              <div className="w-6 h-6 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                <Mail size={11} className="text-emerald-600"/>
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-semibold text-slate-800">{h.owner_name||h.owner_id}</span>
+                  <span className="text-xs text-slate-400">pushed</span>
+                  <span className="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">{h.sequence_type}</span>
+                  {h.contact_count>0&&<span className="text-xs text-slate-500">{h.contact_count} contact{h.contact_count!==1?"s":""}</span>}
+                </div>
+                <div className="flex items-center gap-3 mt-1">
+                  <span className="text-xs text-slate-400">{h.pushed_at?new Date(h.pushed_at).toLocaleString("en-US",{month:"short",day:"numeric",year:"numeric",hour:"2-digit",minute:"2-digit"}):new Date(h.created_at).toLocaleString("en-US",{month:"short",day:"numeric",year:"numeric",hour:"2-digit",minute:"2-digit"})}</span>
+                  {h.instantly_campaign_id&&<a href={`https://app.instantly.ai/app/campaigns/${h.instantly_campaign_id}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"><Globe size={10}/>View in Instantly</a>}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>}
+
       {/* LinkedIn */}
       <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden mt-4">
         <button onClick={()=>setLiOpen(p=>!p)} className="w-full flex items-center justify-between px-5 py-4 hover:bg-slate-50"><div className="flex items-center gap-2"><Linkedin size={15} className="text-blue-600"/><span className="text-sm font-semibold text-slate-800">LinkedIn outreach</span><span className="text-xs text-slate-400 ml-1">· separate from email sequence</span></div><svg className={`text-slate-400 transition-transform ${liOpen?"rotate-180":""}`} width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2"><path d="M2 5l5 5 5-5"/></svg></button>
@@ -1485,7 +1558,7 @@ export default function App(){
         if(settings.supabaseUrl&&settings.supabaseKey) sbDeleteRow(settings.supabaseUrl,settings.supabaseKey,"leads","name",company.name);
       } else {
         const lead={...company,ownerId:cu.username,ownerName:cu.displayName,activityLog:[]};
-        const withLog=addLog(lead,"saved",cu);
+        const withLog=addLog(lead,`saved by ${cu.displayName}`,cu);
         next=[...prev,withLog];
         if(settings.supabaseUrl&&settings.supabaseKey) sbUpsert(settings.supabaseUrl,settings.supabaseKey,"leads",{name:withLog.name,owner_id:withLog.ownerId,owner_name:withLog.ownerName,data:withLog},"name");
       }
@@ -1501,7 +1574,7 @@ export default function App(){
       companies.forEach(company=>{
         if(!next.some(l=>l.name===company.name)){
           const lead={...company,ownerId:cu.username,ownerName:cu.displayName,activityLog:[]};
-          const withLog=addLog(lead,"discovered",cu);
+          const withLog=addLog(lead,`discovered by ${cu.displayName}`,cu);
           next.push(withLog);
           toSave.push(withLog);
         }
@@ -1517,7 +1590,7 @@ export default function App(){
   }
   function logAct(company,action){setLeads(prev=>{const n=prev.map(l=>{if(l.name!==company.name)return l;const updated=addLog(l,action,cu);if(settings.supabaseUrl&&settings.supabaseKey)sbUpsert(settings.supabaseUrl,settings.supabaseKey,"leads",{name:updated.name,owner_id:updated.ownerId,owner_name:updated.ownerName,data:updated},"name");return updated;});ss(S_LEADS,n);return n;});}
   function isSaved(name){return leads.some(l=>l.name===name);}
-  function goEnrich(c,i){setETarget(c);setEIdx(i||0);logAct(c,"enriched");setView("enrich");}
+  function goEnrich(c,i){setETarget(c);setEIdx(i||0);setView("enrich");}
   function goOutreach(c){setOTarget(c);setView("outreach");}
 
   const isAdmin=cu?.role==="admin";
@@ -1542,7 +1615,7 @@ export default function App(){
       {view==="discover"&&<Discover leads={leads} onSave={toggleSave} onBatchSave={batchSave} onEnrich={goEnrich} onOutreach={goOutreach} cu={cu} niches={dynNiches} industries={dynIndustries}/>}
       {view==="saved"&&<Saved leads={leads} onSave={toggleSave} onEnrich={goEnrich} onOutreach={goOutreach} cu={cu}/>}
       {view==="settings"&&isAdmin&&<SettingsView settings={settings} onSave={saveSettings} users={users} onAdd={addUser} onRemove={removeUser} onPwReset={pwReset} cu={cu} niches={dynNiches} industries={dynIndustries} onSaveNiches={saveNiches} onSaveIndustries={saveIndustries}/>}
-      {view==="enrich"&&eTarget&&<Enrich company={eTarget} idx={eIdx} onBack={()=>setView("discover")} onOutreach={goOutreach} onSave={toggleSave} isSaved={isSaved(eTarget.name)} cu={cu} settings={settings}/>}
+      {view==="enrich"&&eTarget&&<Enrich company={eTarget} idx={eIdx} onBack={()=>setView("discover")} onOutreach={goOutreach} onSave={toggleSave} isSaved={isSaved(eTarget.name)} cu={cu} settings={settings} onLogAct={logAct}/>}
       {view==="outreach"&&oTarget&&<Outreach company={oTarget} onBack={()=>setView("discover")} onSave={toggleSave} isSaved={isSaved(oTarget.name)} cu={cu} onLogAct={logAct} settings={settings}/>}
     </div>
   );
