@@ -194,10 +194,18 @@ async function apolloSearchOrgs(industry,size,location,apiKey){
   // Map our size labels to Apollo employee ranges
   const sizeMap={"Startup (1–50)":{min:1,max:50},"SMB (51–250)":{min:51,max:250},"Mid-market (251–1000)":{min:251,max:1000},"Enterprise (1000+)":{min:1000,max:100000}};
   const sizeRange=size?sizeMap[size]:null;
+
+  // Always restrict to USA unless a specific country is mentioned in location
+  // Use organization_locations for country-level filter (most reliable)
+  // Use q_organization_locations for city/state level filter
+  const hasNonUSCountry=location&&/(uk|united kingdom|canada|australia|india|germany|france|europe)/i.test(location);
+  const countryFilter=hasNonUSCountry?[]:[location&&location.trim()?`${location.trim()}, United States`:"United States"];
+
   const body={
     page:1,per_page:5,
     q_organization_keyword_tags:[industry],
-    ...(location?{q_organization_locations:[location]}:{}),
+    organization_locations:countryFilter,  // country-level restriction
+    ...(location&&location.trim()?{q_organization_locations:[location.trim()]}:{}), // city/state refinement
     ...(sizeRange?{organization_num_employees_ranges:[`${sizeRange.min},${sizeRange.max}`]}:{}),
   };
   return apolloProxy(apiKey,"/api/v1/organizations/search",body);
@@ -1219,12 +1227,16 @@ CRITICAL RULES FOR CONTACTS:
 5. Phone type: "Direct", "Mobile", "Office", or "HQ". Null if no phone found.
 Return ONLY valid JSON:
 {"description":"2-sentence overview","founded":"year","headcount":"estimate","revenue":"estimate or Private","funding":"round or Bootstrapped","recentNews":["3 items with dates"],"techStack":["3-5 tech"],"hiringRoles":["3-4 areas"],"keyContacts":[{"name":"","title":"","email":null,"emailType":null,"phone":null,"phoneType":null,"linkedin":"","source":"AI","emailVerified":false},{"name":"","title":"","email":null,"emailType":null,"phone":null,"phoneType":null,"linkedin":"","source":"AI","emailVerified":false}],"painPoints":["2-3 points"],"approachAngle":"one specific angle for Evolve ESolutions","enrichmentSource":"AI"}`;
-    try{const t=await ai(prompt,false);const clean=t.replace(/```json\n?/g,"").replace(/```\n?/g,"").trim();const m=clean.match(/\{[\s\S]*\}/);if(m){const d=JSON.parse(m[0]);setData(d);await ss(`enr_${slug}`,d);if(sbUrl&&sbKey){sbSaveEnrichment(sbUrl,sbKey,slug,company.name,d);sbSaveContacts(sbUrl,sbKey,company.name,d.keyContacts||[]);}onLogAct(company,`AI enriched by ${cu.displayName}`);}else setErr("Parse failed. Try again.");}catch(e){setErr(`Enrichment failed: ${e.message}`);}setLoading(false);
+    try{const t=await ai(prompt,false);const clean=t.replace(/```json\n?/g,"").replace(/```\n?/g,"").trim();const m=clean.match(/\{[\s\S]*\}/);if(m){const d=JSON.parse(m[0]);setData(d);await ss(`enr_${slug}`,d);if(sbUrl&&sbKey){sbSaveEnrichment(sbUrl,sbKey,slug,company.name,d);sbSaveContacts(sbUrl,sbKey,company.name,d.keyContacts||[]);}onLogAct(company,`AI enriched by ${cu.displayName}`);}else setErr("Parse failed. Try again.");}catch(e){
+      const isRateLimit=e.message?.includes("429")||e.message?.includes("529")||e.message?.toLowerCase().includes("rate")||e.message?.toLowerCase().includes("overload");
+      setErr(isRateLimit?`AI rate limit — try again shortly. You can still use "Apollo contacts" button to fetch contacts now without AI.`:`Enrichment failed: ${e.message}`);
+    }setLoading(false);
   }
   async function enrichWithApollo(){
     if(!apolloKey){setErr("Add Apollo API key in Settings first.");return;}
-    if(!data){setErr("Run AI enrichment first — Apollo overlays contacts on top of the AI research.");return;}
-    setLoading(true);setErr("");setData(null);setCached(false);
+    // Apollo can run independently — no AI enrichment required
+    setLoading(true);setErr("");setCached(false);
+    if(!data) setData({}); // init empty data shell so contacts can be stored
     try{
       // Extract clean domain from website — NO guessing from company name
       const rawSite=company.website?.replace(/https?:\/\//,"").replace(/^www\./,"").replace(/\/.*/,"")?.toLowerCase()?.trim()||"";
@@ -1255,7 +1267,11 @@ Return ONLY valid JSON:
       // Merge: keep existing contacts + add Apollo ones, cap at 5
       const existing=(data?.keyContacts||[]).filter(x=>x.source!=="Apollo");
       const combined=[...existing,...apolloContacts].slice(0,5);
-      const merged={...(data||{}),keyContacts:combined,enrichmentSource:"Apollo (contacts)"};
+      const merged={
+        ...(data&&Object.keys(data).length>0?data:{}),
+        keyContacts:combined,
+        enrichmentSource:data?.enrichmentSource?"Apollo (contacts over AI)":"Apollo (contacts only)",
+      };
       setData(merged);
       await ss(`enr_${slug}`,merged);
       if(sbUrl&&sbKey){
@@ -1287,6 +1303,13 @@ Return ONLY valid JSON:
         {company.website?<a href={`https://${company.website}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"><Globe size={11}/>{company.website}</a>:<span className="text-xs text-amber-600 flex items-center gap-1">⚠️ No verified website — Apollo enrichment unavailable</span>}
         </div><div className="flex gap-2"><button onClick={()=>onOutreach(company)} className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white rounded-xl text-sm font-medium hover:bg-emerald-700"><Mail size={14}/>Outreach</button><button onClick={()=>onSave(company)} className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium border transition-all ${isSaved?"bg-slate-800 text-white border-slate-800":"border-slate-200 text-slate-700 hover:border-slate-400"}`}>{isSaved?<><BookmarkCheck size={14}/>Saved</>:<><Bookmark size={14}/>Save</>}</button></div></div>
       {!data&&!loading&&<div className="bg-white rounded-2xl border border-slate-200 p-10 text-center">
+        {apolloKey&&<div className="mb-4">
+          <button onClick={enrichWithApollo} className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700 mb-2">
+            <Users size={14}/>Run Apollo contacts only
+          </button>
+          <p className="text-xs text-slate-400">Skip AI enrichment and fetch contacts directly from Apollo</p>
+        </div>}
+        <div className="text-slate-300 text-3xl mb-3">🔍</div>
         <TrendingUp size={36} className="text-slate-300 mx-auto mb-3"/>
         <h2 className="font-semibold text-slate-700 mb-1">Deep company research</h2>
         <p className="text-sm text-slate-500 mb-6 max-w-sm mx-auto">AI researches the company and surfaces contacts, news, tech stack and a tailored approach angle. Then optionally overlay verified contacts from Apollo.</p>
@@ -1294,7 +1317,7 @@ Return ONLY valid JSON:
       </div>}
       {loading&&<div className="bg-white rounded-2xl border border-slate-200 p-10 text-center"><Loader2 size={28} className="animate-spin text-violet-500 mx-auto mb-3"/><p className="text-sm text-slate-500 mb-1">Researching {company.name}…</p><p className="text-xs text-slate-400">Classifying contacts — 20–30 seconds.</p></div>}
       {err&&<div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 border border-red-100 rounded-xl px-4 py-3 mb-4"><AlertCircle size={14}/>{err}</div>}
-      {data&&<div className="space-y-4">
+      {<div className="space-y-4">
         <div className={`flex items-center justify-between px-4 py-2.5 rounded-xl border ${cached?"bg-indigo-50 border-indigo-100":"bg-emerald-50 border-emerald-100"}`}>
         <div className="flex items-center gap-2">
           <CheckCircle2 size={14} className={cached?"text-indigo-500":"text-emerald-500"}/>
@@ -1303,8 +1326,8 @@ Return ONLY valid JSON:
           </span>
         </div>
         <div className="flex items-center gap-2">
-          {apolloKey&&<button onClick={enrichWithApollo} className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 px-2 py-1 rounded-lg border border-blue-200 bg-blue-50"><Users size={11}/>Overlay Apollo contacts</button>}
-          <button onClick={enrich} className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-700 px-2 py-1 rounded-lg border border-slate-200 bg-white"><RefreshCw size={11}/>Re-run AI</button>
+          {apolloKey&&<button onClick={enrichWithApollo} className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 px-2 py-1 rounded-lg border border-blue-200 bg-blue-50"><Users size={11}/>Apollo contacts</button>}
+          <button onClick={enrich} className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-700 px-2 py-1 rounded-lg border border-slate-200 bg-white"><RefreshCw size={11}/>{data?"Re-run AI":"Run AI enrichment"}</button>
         </div>
       </div>
         <div className="bg-white rounded-2xl border border-slate-200 p-5"><h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Overview</h3><p className="text-sm text-slate-700 leading-relaxed mb-4">{data.description}</p><div className="grid grid-cols-4 gap-3">{[["Founded",data.founded],["Headcount",data.headcount],["Revenue",data.revenue],["Funding",data.funding]].map(([l,v])=><div key={l} className="bg-slate-50 rounded-xl p-3"><div className="text-xs text-slate-400 mb-1">{l}</div><div className="text-sm font-semibold text-slate-800">{v||"—"}</div></div>)}</div></div>
