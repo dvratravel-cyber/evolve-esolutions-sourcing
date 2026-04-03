@@ -187,9 +187,16 @@ async function apolloFindContacts(domain,apiKey){
   // Step 2: Enrich each person via people/match (Basic plan: full name + LinkedIn + email)
   const enriched=await Promise.all(found.map(async p=>{
     try{
-      // Basic plan: request work email + personal emails
-      // Phone numbers come back in phone_numbers[] when Apollo has them
-      const res=await apolloProxy(apiKey,`/api/v1/people/match?id=${p.id}&reveal_personal_emails=false`);
+      // Cache by Apollo person ID — avoids re-charging credits if same person looked up again
+      const cacheKey=`apollo_person_${p.id}`;
+      let res;
+      try{const cached=localStorage.getItem(cacheKey);res=cached?JSON.parse(cached):null;}catch{res=null;}
+      if(!res){
+        // 1 credit for work email. phone_numbers[] included free if Apollo has them on record.
+        // Never use reveal_phone_number=true (8 extra credits) or reveal_personal_emails=true.
+        res=await apolloProxy(apiKey,`/api/v1/people/match?id=${p.id}`);
+        try{localStorage.setItem(cacheKey,JSON.stringify(res));}catch{}
+      }
       const ep=res?.person||{};
 
       // Basic plan returns full last_name (not obfuscated)
@@ -943,7 +950,7 @@ function Saved({leads,onSave,onEnrich,onOutreach,cu}){
 // ══ ENRICH ══
 function Enrich({company,idx,onBack,onOutreach,onSave,isSaved,cu,settings}){
   const [loading,setLoading]=useState(false);const [data,setData]=useState(null);const [err,setErr]=useState("");const [cached,setCached]=useState(false);
-  const MAX_CONTACTS=5;
+  const MAX_CONTACTS=10;
   const [showAddContact,setShowAddContact]=useState(false);
   const [newContact,setNewContact]=useState({name:"",title:"",email:"",phone:""});
   const [addContactErr,setAddContactErr]=useState("");
@@ -1202,6 +1209,31 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
     value:`Write a value-add email from Evolve ESolutions to ${company.name} — asking for nothing.\n${E}\nSignal: ${company.signal}. Share a genuine hiring trend insight for ${spec}. Position as a knowledgeable partner. Soft close. Under 100 words.\nSubject: [subject]\n\n[email body]\n\n${placeholderSig}`,
     breakup:`Write a break-up email from Evolve ESolutions to ${company.name}. Acknowledge it's one-sided. Leave the door open. One final value line. Under 70 words. The best break-up emails always get replies.\nSubject: [subject]\n\n[email body]\n\n${placeholderSig}`,
   };
+  async function generateAll(){
+    // Generate all email steps sequentially — shows each one as it generates
+    const emailSteps=tmpl.steps.filter(s=>s.type==="email");
+    setLoading(true);setIErr("");
+    for(const s of emailSteps){
+      if(generatedSteps[s.label])continue; // skip already generated
+      const t=EMAIL_TYPES.find(e=>s.label.toLowerCase().includes(e[0]))?.[0]||"intro";
+      setStep(s);setEType(t);setContent("Generating...");
+      try{
+        const txt=await ai(prompts[t]||prompts.intro,false,600);
+        setContent(txt);
+        const lines=txt.split("\n");
+        const subLine=lines.find(l=>l.toLowerCase().startsWith("subject:"))||"Subject: Quick follow-up";
+        const subj=subLine.replace(/^subject:\s*/i,"").trim();
+        const body=lines.slice(lines.indexOf(subLine)+2).join("\n").trim();
+        setGeneratedSteps(prev=>{
+          const next={...prev,[s.label]:{subject:subj,body,day:s.day,label:s.label}};
+          try{localStorage.setItem(outreachCacheKey,JSON.stringify(next));}catch{}
+          return next;
+        });
+      }catch(e){setContent(`Error: ${e.message}`);break;}
+    }
+    setLoading(false);
+  }
+
   async function gen(s,t){
     setStep(s);setEType(t||"intro");setContent("");setLoading(true);
     try{
@@ -1242,10 +1274,13 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
       // Use pre-generated steps from state
       const steps=emailSteps.map(s=>generatedSteps[s.label]).filter(Boolean);
       const enriched=await sg(`enr_${company.name.toLowerCase().replace(/\s+/g,"_")}`);
-      const allContacts=(enriched?.keyContacts||[]).map(c=>({...c,company:company.name}));
-      const contacts=allContacts.filter(c=>c.email&&c.email!=="Not found"&&c.email!==null);
+      // Use data from state (includes manually added/edited contacts) — fallback to localStorage
+      const allContacts=((data?.keyContacts)||enriched?.keyContacts||[]).map(c=>({...c,company:company.name}));
+      // Valid email = exists, not null, not placeholder text
+      const contacts=allContacts.filter(c=>c.email&&c.email!=="Not found"&&c.email!==null&&c.email.includes("@"));
       const skipped=allContacts.length-contacts.length;
       setISkipped(skipped);
+      if(!contacts.length){setIErr("No contacts with valid emails found. Add or edit contact emails in the Enrich view first.");setIPushing(false);return;}
       const campaignName=`Evolve — ${company.name} — ${new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`;
       const campaignId=await instantlyCreateCampaign(instantlyKey,campaignName,contacts,steps);
       onLogAct(company,"pushed to Instantly");
@@ -1306,7 +1341,11 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
           <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-4"><div className="text-xs font-semibold text-indigo-400 uppercase tracking-wide mb-3 flex items-center gap-1.5"><Sparkles size={12}/>Pitch pillars</div><ul className="space-y-2">{[["⚡","24–48hr delivery"],["🎯","Passive talent access"],["🔄","Contract, perm & retained"],["✅","No placement, no fee"],["🚀","1–3 day onboarding"]].map(([icon,text])=><li key={text} className="flex items-center gap-2 text-xs text-indigo-800"><span>{icon}</span><span>{text}</span></li>)}</ul></div>
           <div className="bg-white rounded-2xl border border-slate-200 p-4">
             <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Email sequence</h3>
-            <div className="flex gap-1.5 mb-3">{SEQ_TEMPLATES.map(t=><button key={t.id} onClick={()=>{setTmpl(t);setGeneratedSteps({});setStep(null);setContent("");}} className={`flex-1 py-2 rounded-xl border text-xs font-medium transition-all ${tmpl.id===t.id?"bg-slate-800 text-white border-slate-800":"border-slate-200 text-slate-600 hover:border-slate-400"}`}>{t.label}</button>)}</div>
+            <div className="flex gap-1.5 mb-2">{SEQ_TEMPLATES.map(t=><button key={t.id} onClick={()=>{setTmpl(t);setGeneratedSteps({});setStep(null);setContent("");}} className={`flex-1 py-2 rounded-xl border text-xs font-medium transition-all ${tmpl.id===t.id?"bg-slate-800 text-white border-slate-800":"border-slate-200 text-slate-600 hover:border-slate-400"}`}>{t.label}</button>)}</div>
+            <button onClick={generateAll} disabled={loading} className="w-full flex items-center justify-center gap-1.5 py-2 mb-3 rounded-xl border border-violet-200 bg-violet-50 text-violet-700 text-xs font-medium hover:bg-violet-100 disabled:opacity-50">
+              {loading?<><Loader2 size={11} className="animate-spin"/>Generating…</>:<><Sparkles size={11}/>Generate all {tmpl.steps.filter(s=>s.type==="email").length} steps</>}
+              {!loading&&Object.keys(generatedSteps).length>0&&<span className="ml-1 text-emerald-600">({Object.keys(generatedSteps).length} done)</span>}
+            </button>
             <div className="relative"><div className="absolute left-3.5 top-3 bottom-3 w-px bg-slate-100"/>
               <div className="space-y-2">{tmpl.steps.map((s,i)=><div key={i} className={`relative flex items-center gap-3 p-2.5 rounded-xl cursor-pointer border transition-all ${step?.label===s.label&&step?.day===s.day?"border-emerald-200 bg-emerald-50":"border-transparent hover:border-slate-200 hover:bg-slate-50"}`} onClick={()=>{
                   const eTypeForStep=EMAIL_TYPES.find(e=>s.label.toLowerCase().includes(e[0]))?.[0]||"intro";
