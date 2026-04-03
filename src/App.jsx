@@ -1371,8 +1371,8 @@ JSON array only (no text before or after):
         <button onClick={search} disabled={!canSearch||loading} className={`w-full py-3 rounded-xl font-medium text-sm flex items-center justify-center gap-2 transition-all ${canSearch&&!loading?"bg-slate-800 text-white hover:bg-slate-700":"bg-slate-100 text-slate-400 cursor-not-allowed"}`}>
           {loading?<><Loader2 size={15} className="animate-spin"/>Searching the web...</>:<><Search size={15}/>Find matching clients{searchLabel?` in ${searchLabel}`:""}</>}
         </button>
+        </div>}
       </div>
-      </div>}
 
       {err&&<div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 border border-red-100 rounded-xl px-4 py-3 mb-4"><AlertCircle size={14}/>{err}</div>}
 
