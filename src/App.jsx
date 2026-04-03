@@ -320,9 +320,12 @@ async function instantlyCreateCampaign(apiKey,campaignName,contacts,emailSteps){
       leads:validContacts.map(c=>{
         const cleanName=(c.name&&c.name!=="Unknown")?c.name.trim():"";
         const parts=cleanName.split(" ").filter(Boolean);
+        // If no name, derive first name from email prefix: alex.smith@co.com → Alex
+        const emailPrefix=c.email?.split("@")[0]?.split(/[._+\-]/)[0]||"";
+        const emailFirst=emailPrefix?emailPrefix.charAt(0).toUpperCase()+emailPrefix.slice(1).toLowerCase():"";
         return {
           email:c.email,
-          first_name:parts[0]||"",
+          first_name:parts[0]||emailFirst||"",
           last_name:parts.slice(1).join(" ")||"",
           company_name:c.company||"",
           phone:(c.phone&&c.phone!=="Not found")?c.phone:"",
