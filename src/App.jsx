@@ -4,7 +4,7 @@ import {
   ArrowLeft, Copy, RefreshCw, AlertCircle, Phone, Linkedin,
   TrendingUp, Users, Globe, Zap, CheckCircle2, BarChart2,
   Target, Trash2, FileText, Settings, Download, Play, Square,
-  Key, Database, Mic, LogOut, UserPlus, Shield, User, Eye, Plus,
+  Key, Database, Mic, LogOut, UserPlus, Shield, User, Eye, Plus, Briefcase,
   EyeOff, Clock, Activity, ChevronDown, ChevronRight, Tag, X, Pencil, Check, Send
 } from "lucide-react";
 
@@ -1517,7 +1517,7 @@ function CompanyDetail({company,idx,onBack,onSave,isSaved,cu,settings,onLogAct,o
         <span>/</span>
         <span className="text-slate-600 font-medium">{company.name}</span>
         <StageBadge stage={stage}/>
-        {company.source&&<SourceBadge source={company.source}/>}
+        <SourceBadge source={company.source} lead={company}/>
       </div>
 
       {/* Header */}
@@ -1572,7 +1572,7 @@ function CompanyDetail({company,idx,onBack,onSave,isSaved,cu,settings,onLogAct,o
           <div className="bg-white rounded-2xl border border-slate-200 p-5">
             <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Lead info</h3>
             <div className="grid grid-cols-3 gap-4 text-xs">
-              <div><span className="text-slate-400 block mb-1">Source</span><span className="font-medium text-slate-700">{company.source?`${company.source.channel} - ${company.source.method}`:"Unknown"}</span></div>
+              <div><span className="text-slate-400 block mb-1">Source</span><span className="font-medium text-slate-700">{company.source?`${company.source.channel} - ${company.source.method}`:company.searchMode?"Discover - "+company.searchMode:"Discover"}</span></div>
               <div><span className="text-slate-400 block mb-1">Stage</span><StageBadge stage={stage}/></div>
               <div><span className="text-slate-400 block mb-1">Owner</span><span className="font-medium text-slate-700">{company.ownerName||"—"}</span></div>
               {company.source?.label&&<div><span className="text-slate-400 block mb-1">Search</span><span className="font-medium text-slate-700">{company.source.label}</span></div>}
@@ -1595,13 +1595,19 @@ function CompanyDetail({company,idx,onBack,onSave,isSaved,cu,settings,onLogAct,o
   );
 }
 
-function SourceBadge({source}){
-  if(!source)return null;
-  const icons={"Discover":"[D]","Import":"[I]","Manual":"[M]"};
-  const colors={"AI Only":"bg-violet-50 text-violet-700","AI + Web":"bg-blue-50 text-blue-700","Apollo":"bg-cyan-50 text-cyan-700","SerpAPI":"bg-amber-50 text-amber-700","CSV":"bg-emerald-50 text-emerald-700","Manual Entry":"bg-slate-100 text-slate-600"};
+function SourceBadge({source,lead}){
+  // Build source from legacy lead fields if source object missing
+  const resolved=source||(()=>{
+    if(!lead)return null;
+    const method=lead.searchMode==="niche"?"Niche":lead.searchMode==="industry"?"Industry":lead.searchMode||"AI Only";
+    return {channel:"Discover",method,label:lead.searchLabel||lead.industry||""};
+  })();
+  if(!resolved)return <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full font-medium bg-slate-100 text-slate-500">Discover</span>;
+  const colors={"AI Only":"bg-violet-50 text-violet-700","AI + Web":"bg-blue-50 text-blue-700","Apollo":"bg-cyan-50 text-cyan-700","SerpAPI":"bg-amber-50 text-amber-700","Niche":"bg-indigo-50 text-indigo-700","Industry":"bg-slate-100 text-slate-600","CSV":"bg-emerald-50 text-emerald-700","Manual Entry":"bg-slate-100 text-slate-600"};
+  const tip=`${resolved.channel} - ${resolved.method}${resolved.label?" - "+resolved.label:""}`;
   return(
-    <span className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full font-medium ${colors[source.method]||"bg-slate-100 text-slate-500"}`} title={`${source.channel} - ${source.method}${source.label?" - "+source.label:""}`}>
-      {icons[source.channel]||"🔍"} {source.method||source.channel}
+    <span className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full font-medium ${colors[resolved.method]||"bg-slate-100 text-slate-500"}`} title={tip}>
+      {resolved.method||resolved.channel}
     </span>
   );
 }
@@ -1656,7 +1662,7 @@ function Saved({leads,onSave,onEnrich,onOutreach,cu,onStage,settings}){
               <div className="flex items-center gap-3">
                 <Av name={c.name} idx={i}/>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap"><span className="font-semibold text-slate-800 text-sm">{c.name}</span><Score s={c.fitScore}/><StageBadge stage={c.stage}/>{c.source&&<SourceBadge source={c.source}/>}{isAdmin&&c.ownerName&&<span className="flex items-center gap-1 text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full"><User size={10}/>{c.ownerName}</span>}</div>
+                  <div className="flex items-center gap-2 flex-wrap"><span className="font-semibold text-slate-800 text-sm">{c.name}</span><Score s={c.fitScore}/><StageBadge stage={c.stage}/><SourceBadge source={c.source} lead={c}/>{isAdmin&&c.ownerName&&<span className="flex items-center gap-1 text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full"><User size={10}/>{c.ownerName}</span>}</div>
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-xs text-slate-500">{c.industry} · {c.location}</span>
                     {c.website&&<a href={`https://${c.website}`} target="_blank" rel="noreferrer" onClick={e=>e.stopPropagation()} className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"><Globe size={10}/>{c.website}</a>}
@@ -1762,15 +1768,21 @@ function Enrich({company,idx,onBack,onOutreach,onSave,isSaved,cu,settings,onLogA
   },[company.name]);
   async function enrich(){
     setLoading(true);setErr("");setData(null);setCached(false);
-    const prompt=`Business intelligence for Evolve ESolutions. Research ${company.name} (${company.website||company.industry}, ${company.location}).
-CRITICAL RULES FOR CONTACTS:
-1. Only include email if you have found it from a verifiable source (company website, press release, LinkedIn, etc). DO NOT guess or construct email addresses from name patterns.
-2. If email is unknown, set email to null. Never guess formats like firstname@company.com.
-3. Same for phone - only include if found from a real source. Set to null if unknown.
-4. Email type: "Work" (company domain) or "Personal" (gmail/yahoo etc). Null if no email found.
-5. Phone type: "Direct", "Mobile", "Office", or "HQ". Null if no phone found.
-Return ONLY valid JSON:
-{"description":"2-sentence overview","founded":"year","headcount":"estimate","revenue":"estimate or Private","funding":"round or Bootstrapped","recentNews":["3 items with dates"],"techStack":["3-5 tech"],"hiringRoles":["3-4 areas"],"keyContacts":[{"name":"","title":"","email":null,"emailType":null,"phone":null,"phoneType":null,"linkedin":"","source":"AI","emailVerified":false},{"name":"","title":"","email":null,"emailType":null,"phone":null,"phoneType":null,"linkedin":"","source":"AI","emailVerified":false}],"painPoints":["2-3 points"],"approachAngle":"one specific angle for Evolve ESolutions","enrichmentSource":"AI"}`;
+    const prompt=`Business intelligence for Evolve ESolutions (IT/HR/Healthcare/Legal/Financial Services recruitment). Research ${company.name} (website: ${company.website||"unknown"}, industry: ${company.industry||"unknown"}, location: ${company.location||"unknown"}).
+
+CONTACT RULES (strictly follow):
+1. Only include email if found from a real source (website, press release, LinkedIn). Never guess or construct emails.
+2. If email unknown, set null. Never invent firstname@company.com patterns.
+3. Same for phone - real source only, null if unknown.
+4. Email type: "Work" or "Personal". Null if no email.
+5. Phone type: "Direct", "Mobile", "Office", or "HQ". Null if no phone.
+
+JOB POSTINGS: Search ${company.website||company.name} careers page and their LinkedIn company page for active job postings from the last 3 months. List up to 6 real roles currently being hired.
+
+COMPANY LINKEDIN: Find their official LinkedIn company page URL (format: linkedin.com/company/name).
+
+Return ONLY valid JSON, no markdown:
+{"description":"2-sentence overview","founded":"year or null","headcount":"employee count estimate","revenue":"ARR/revenue estimate or Private","funding":"latest round + amount or Bootstrapped","companyLinkedin":"linkedin.com/company/name or null","recentNews":["up to 3 recent news items with month+year"],"techStack":["3-5 key technologies they use"],"recentJobs":[{"title":"Job Title","department":"Engineering/Sales/etc","postedDate":"Month YYYY or Recent"},{"title":"Job Title","department":"","postedDate":""}],"hiringRoles":["3-4 broad hiring areas based on job postings"],"keyContacts":[{"name":"","title":"","email":null,"emailType":null,"phone":null,"phoneType":null,"linkedin":"","source":"AI","emailVerified":false},{"name":"","title":"","email":null,"emailType":null,"phone":null,"phoneType":null,"linkedin":"","source":"AI","emailVerified":false}],"painPoints":["2-3 recruitment pain points for this company"],"approachAngle":"one specific outreach angle for Evolve ESolutions based on their job postings and signals","enrichmentSource":"AI"}`;
     try{const t=await ai(prompt,false);const clean=t.split("```json").join("").split("```").join("").trim();const m=clean.match(/\{[\s\S]*\}/);if(m){const d=JSON.parse(m[0]);setData(d);await ss(`enr_${slug}`,d);if(sbUrl&&sbKey){sbSaveEnrichment(sbUrl,sbKey,slug,company.name,d);sbSaveContacts(sbUrl,sbKey,company.name,d.keyContacts||[]);}onLogAct(company,`AI enriched by ${cu.displayName}`);}else setErr("Parse failed. Try again.");}catch(e){
       const msg=e.message||"";
       const isRateLimit=msg.includes("429")||msg.includes("529")||msg.toLowerCase().includes("rate")||msg.toLowerCase().includes("overload");
@@ -1942,7 +1954,26 @@ Return ONLY valid JSON:
         </div>
         <div className="grid grid-cols-2 gap-4">
           <div className="bg-white rounded-2xl border border-slate-200 p-5"><h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3 flex items-center gap-1.5"><BarChart2 size={13}/>Recent news</h3><ul className="space-y-2">{(data.recentNews||[]).map((n,i)=><li key={i} className="flex items-start gap-2 text-sm text-slate-700"><span className="w-4 h-4 rounded-full bg-violet-100 text-violet-700 text-xs flex items-center justify-center flex-shrink-0 mt-0.5">{i+1}</span>{n}</li>)}</ul></div>
-          <div className="bg-white rounded-2xl border border-slate-200 p-5"><h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3 flex items-center gap-1.5"><Users size={13}/>Hiring areas</h3><div className="flex flex-wrap gap-2 mb-4">{(data.hiringRoles||[]).map((r,i)=><Pill key={i} label={r} color="bg-emerald-50 text-emerald-700"/>)}</div><h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2 flex items-center gap-1.5"><Globe size={13}/>Tech stack</h3><div className="flex flex-wrap gap-2">{(data.techStack||[]).map((t,i)=><Pill key={i} label={t} color="bg-slate-100 text-slate-600"/>)}</div></div>
+          <div className="bg-white rounded-2xl border border-slate-200 p-5">
+            {/* Company LinkedIn */}
+            {data.companyLinkedin&&<div className="mb-4 pb-4 border-b border-slate-100"><h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2 flex items-center gap-1.5"><Linkedin size={13}/>Company LinkedIn</h3><a href={`https://${data.companyLinkedin.replace("https://","").replace("http://","")}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-xs text-blue-600 hover:underline"><Globe size={11}/>{data.companyLinkedin}</a></div>}
+            {/* Recent job postings */}
+            {(data.recentJobs||[]).length>0&&<div className="mb-4 pb-4 border-b border-slate-100">
+              <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3 flex items-center gap-1.5"><Briefcase size={13}/>Active job postings <span className="text-slate-300 font-normal normal-case">(last 3 months)</span></h3>
+              <div className="space-y-2">
+                {(data.recentJobs||[]).map((j,i)=>(
+                  <div key={i} className="flex items-center justify-between py-1.5 border-b border-slate-50 last:border-0">
+                    <div><span className="text-sm font-medium text-slate-800">{j.title}</span>{j.department&&<span className="ml-2 text-xs text-slate-400">{j.department}</span>}</div>
+                    {j.postedDate&&<span className="text-xs text-slate-400 flex-shrink-0 ml-2">{j.postedDate}</span>}
+                  </div>
+                ))}
+              </div>
+            </div>}
+            <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3 flex items-center gap-1.5"><Users size={13}/>Hiring areas</h3>
+            <div className="flex flex-wrap gap-2 mb-4">{(data.hiringRoles||[]).map((r,i)=><Pill key={i} label={r} color="bg-emerald-50 text-emerald-700"/>)}</div>
+            <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2 flex items-center gap-1.5"><Globe size={13}/>Tech stack</h3>
+            <div className="flex flex-wrap gap-2">{(data.techStack||[]).map((t,i)=><Pill key={i} label={t} color="bg-slate-100 text-slate-600"/>)}</div>
+          </div>
         </div>
         <div className="grid grid-cols-2 gap-4">
           <div className="bg-white rounded-2xl border border-slate-200 p-5"><h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3 flex items-center gap-1.5"><AlertCircle size={13}/>Pain points</h3><ul className="space-y-2">{(data.painPoints||[]).map((p,i)=><li key={i} className="flex items-start gap-2 text-sm text-slate-700"><span className="w-1.5 h-1.5 rounded-full bg-rose-400 mt-2 flex-shrink-0"/>{p}</li>)}</ul></div>
