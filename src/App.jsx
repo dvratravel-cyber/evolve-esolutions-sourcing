@@ -858,9 +858,7 @@ function ImportTab({leads,onBatchSave,cu,settings}){
   function updateRow(id,field,val){setRows(p=>p.map(r=>r.id===id?{...r,[field]:val}:r));}
 
   function parseCSV(text){
-    const lines=text.trim().split(/
-?
-/).filter(Boolean);
+    const lines=text.trim().split(/\r\n|\r|\n/).filter(Boolean);
     if(!lines.length)return[];
     // Detect header row
     const first=lines[0].toLowerCase();
