@@ -318,8 +318,8 @@ async function instantlyCreateCampaign(apiKey,campaignName,contacts,emailSteps){
       campaign_id:campaignId,
       leads:validContacts.map(c=>({
         email:c.email,
-        first_name:c.name?.split(" ")[0]||"",
-        last_name:c.name?.split(" ").slice(1).join(" ")||"",
+        first_name:(c.name||"").trim().split(" ")[0]||"",
+        last_name:(c.name||"").trim().split(" ").slice(1).join(" ")||"",
         company_name:c.company||"",
         phone:c.phone||"",
         website:c.linkedin||"",
