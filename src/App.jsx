@@ -826,6 +826,7 @@ function ImportTab({leads,onBatchSave,cu,settings}){
   const PENDING_KEY="evolve_import_queue_v4";
   const MAX_PENDING=500;
   const [rows,setRows]=useState([{name:"",website:"",id:Date.now()}]); // editable table
+  const [rowErrors,setRowErrors]=useState({}); // {rowId: "error message"}
   const [queue,setQueue]=useState([]); // persisted pending queue
   const [processing,setProcessing]=useState(false);
   const [procMsg,setProcMsg]=useState("");
@@ -855,7 +856,23 @@ function ImportTab({leads,onBatchSave,cu,settings}){
 
   function addRow(){setRows(p=>[...p,{name:"",website:"",id:Date.now()}]);}
   function removeRow(id){setRows(p=>p.filter(r=>r.id!==id));}
-  function updateRow(id,field,val){setRows(p=>p.map(r=>r.id===id?{...r,[field]:val}:r));}
+  function updateRow(id,field,val){
+    setRows(p=>p.map(r=>r.id===id?{...r,[field]:val}:r));
+    if(field==="name"&&val.trim()){
+      const nameLC=val.trim().toLowerCase();
+      const isDupLead=leads.some(l=>l.name.toLowerCase()===nameLC);
+      const isDupQueue=queue.some(q=>q.name.toLowerCase()===nameLC);
+      if(isDupLead){
+        setRowErrors(p=>({...p,[id]:"Already exists as a lead"}));
+      } else if(isDupQueue){
+        setRowErrors(p=>({...p,[id]:"Already in pending queue"}));
+      } else {
+        setRowErrors(p=>{const n={...p};delete n[id];return n;});
+      }
+    } else if(field==="name"&&!val.trim()){
+      setRowErrors(p=>{const n={...p};delete n[id];return n;});
+    }
+  }
 
   function parseCSV(text){
     const lines=text.trim().split(/\r\n|\r|\n/).filter(Boolean);
@@ -867,7 +884,7 @@ function ImportTab({leads,onBatchSave,cu,settings}){
     return dataLines.map(line=>{
       const parts=line.split(",").map(p=>p.trim().replace(/^"|"$/g,""));
       return{name:parts[0]||"",website:parts[1]||"",id:Date.now()+Math.random()};
-    }).filter(r=>r.name);
+    }).filter(r=>r.name&&r.name.trim());
   }
 
   function handleFileUpload(e){
@@ -899,7 +916,19 @@ function ImportTab({leads,onBatchSave,cu,settings}){
     }
     const alreadyInQueue=queue.map(q=>q.name.toLowerCase());
     const alreadyLead=leads.map(l=>l.name.toLowerCase());
+    // Separate duplicates from fresh rows
+    const dupes=valid.filter(r=>alreadyInQueue.includes(r.name.trim().toLowerCase())||alreadyLead.includes(r.name.trim().toLowerCase()));
     const fresh=valid.filter(r=>!alreadyInQueue.includes(r.name.trim().toLowerCase())&&!alreadyLead.includes(r.name.trim().toLowerCase()));
+    // Remove duplicate rows from the entry table immediately
+    if(dupes.length){
+      setRows(p=>p.filter(r=>!dupes.some(d=>d.name.trim().toLowerCase()===r.name.trim().toLowerCase())));
+      const dupeNames=dupes.map(d=>d.name).join(", ");
+      if(!fresh.length){
+        setErr(`All companies already exist: ${dupeNames}. Duplicate rows removed.`);
+        return;
+      }
+      setErr(`Duplicates removed: ${dupeNames}. Saving ${fresh.length} new ${fresh.length===1?"company":"companies"}.`);
+    }
     if(!fresh.length){setErr("All companies already exist in your queue or leads.");return;}
     if(queue.length+fresh.length>MAX_PENDING){setErr(`Queue would exceed ${MAX_PENDING} max. Remove some first.`);return;}
     const newItems=fresh.map(r=>({
@@ -925,6 +954,7 @@ function ImportTab({leads,onBatchSave,cu,settings}){
     const pending=queue.filter(r=>r.status==="pending").slice(0,n);
     if(!pending.length){setErr("No pending companies to process.");return;}
     setProcessing(true);setProcMsg(`Processing ${pending.length} companies...`);setErr("");
+    const processedIds=[];
     const newLeads=[];
     for(const row of pending){
       const lead={
@@ -933,16 +963,18 @@ function ImportTab({leads,onBatchSave,cu,settings}){
         source:{channel:"Import",method:"CSV",label:""},stage:"new",
       };
       newLeads.push(lead);
-      // Mark done in queue
-      const updated=queue.map(q=>q.id===row.id?{...q,status:"done"}:q);
-      saveQueue(updated);
+      processedIds.push(row.id);
+      // Delete from Supabase immediately
       if(settings?.supabaseUrl&&settings?.supabaseKey){
-        await sbMarkImportDone(settings.supabaseUrl,settings.supabaseKey,row.id);
+        await sbDeleteImportRow(settings.supabaseUrl,settings.supabaseKey,row.id);
       }
     }
+    // Remove converted rows from queue entirely (not just mark done)
+    const remaining=queue.filter(q=>!processedIds.includes(q.id));
+    saveQueue(remaining);
     onBatchSave(newLeads);
     setProcessing(false);
-    setProcMsg(`${pending.length} companies converted to leads! Find them in All Leads > New.`);
+    setProcMsg(`${newLeads.length} ${newLeads.length===1?"company":"companies"} converted to leads. Find them in All Leads > New.`);
     setTimeout(()=>setProcMsg(""),5000);
   }
 
@@ -978,7 +1010,10 @@ function ImportTab({leads,onBatchSave,cu,settings}){
               {rows.map((row,i)=>(
                 <tr key={row.id} className="hover:bg-slate-50">
                   <td className="px-3 py-1.5 text-slate-400">{i+1}</td>
-                  <td className="px-3 py-1.5"><input value={row.name} onChange={e=>updateRow(row.id,"name",e.target.value)} placeholder="Acme Corp" className="w-full bg-transparent outline-none text-slate-800 placeholder-slate-300"/></td>
+                  <td className="px-3 py-1.5">
+                    <input value={row.name} onChange={e=>updateRow(row.id,"name",e.target.value)} placeholder="Acme Corp" className={`w-full bg-transparent outline-none placeholder-slate-300 ${rowErrors[row.id]?"text-red-500":"text-slate-800"}`}/>
+                    {rowErrors[row.id]&&<div className="text-xs text-red-400 mt-0.5">{rowErrors[row.id]}</div>}
+                  </td>
                   <td className="px-3 py-1.5"><input value={row.website} onChange={e=>updateRow(row.id,"website",e.target.value)} placeholder="acme.com" className={`w-full bg-transparent outline-none placeholder-slate-300 ${row.website&&!/^[a-z0-9][a-z0-9\-\.]+\.[a-z]{2,}$/i.test(row.website.trim().replace(/https?:\/\//,"").replace(/^www\./,"").replace(/\/.*/,"").toLowerCase())?"text-red-500":"text-slate-600"}`}/></td>
                   <td className="px-2 py-1.5"><button onClick={()=>removeRow(row.id)} className="text-slate-300 hover:text-red-400"><X size={12}/></button></td>
                 </tr>
