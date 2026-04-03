@@ -1730,11 +1730,18 @@ export default function App(){
         // Leads: stored in data column
         if(sbLeadRows.length) setLeads(sbLeadRows.map(r=>r.data||r));
         else setLeads(l||[]);
-        // Users: stored in config table
+        // Users + niches + industries from config table
         if(config?.users?.length) setUsers(config.users);
         else setUsers(u||[DEFAULT_ADMIN]);
         if(config?.niches?.length)setDynNiches(config.niches);
         if(config?.industries?.length)setDynIndustries(config.industries);
+        // Merge remote settings (API keys from Supabase) into local settings
+        if(config?.settings){
+          const merged={...config.settings,...loadedSettings,supabaseUrl:loadedSettings.supabaseUrl,supabaseKey:loadedSettings.supabaseKey};
+          setSettings(merged);
+          await ss(S_SETTINGS,merged);
+          if(merged.anthropicKey) _anthropicKey=merged.anthropicKey;
+        }
       } else {
         setLeads(l||[]);
         setUsers(u||[DEFAULT_ADMIN]);
@@ -1749,6 +1756,12 @@ export default function App(){
     setSettings(s);
     await ss(S_SETTINGS,s);
     if(s.anthropicKey) _anthropicKey=s.anthropicKey;
+    // Sync settings to Supabase so all users/devices get the same keys
+    if(s.supabaseUrl&&s.supabaseKey){
+      // Store without supabaseUrl/supabaseKey themselves (avoid circular dependency)
+      const {supabaseUrl,supabaseKey,...safeSettings}=s;
+      saveConfigToSB(s.supabaseUrl,s.supabaseKey,"settings",safeSettings);
+    }
   }
   async function saveNiches(niches){
     setDynNiches(niches);
