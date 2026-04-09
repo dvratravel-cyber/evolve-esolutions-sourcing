@@ -196,7 +196,7 @@ async function sbSaveOutreach(url,key,leadName,ownerId,ownerName,sequenceType,st
     owner_name:ownerName||ownerId,
     sequence_type:sequenceType,
     steps,
-    instantly_campaign_id:campaignId||null,
+    reply_campaign_id:campaignId||null,
     contact_count:contactCount,
     pushed_at:campaignId?new Date().toISOString():null,
     created_at:new Date().toISOString(),
@@ -342,8 +342,8 @@ async function apolloFindContacts(domain,apiKey){
   return {people:enriched};
 }
 
-// ── Instantly.ai v2 campaign push (via Vercel proxy to avoid CORS) ──
-// Convert plain text email body to HTML so Instantly preserves line breaks and paragraphs
+// ── Reply.io campaign push (via Vercel proxy to avoid CORS) ──
+// Convert plain text email body to HTML preserving line breaks and paragraphs
 function emailToHtml(text){
   if(!text)return "";
   return text
@@ -351,76 +351,74 @@ function emailToHtml(text){
     .map(para=>`<p>${para.replace(/\n/g,"<br>")}</p>`) // single newlines = <br>
     .join("");
 }
-// NOTE: Requires a v2 API key - Instantly → Settings → API Keys → Create Key (scopes: campaigns:all + leads:all)
-async function instantlyProxy(apiKey,target,body,method="POST"){
-  const r=await fetch("/api/instantly",{
+// NOTE: Requires a Reply.io API key - get from Reply.io → Settings → API → Create Key (scopes: campaigns:all + leads:all)
+async function replyProxy(apiKey,target,body,method="POST"){
+  const r=await fetch("/api/reply",{
     method:"POST",
     headers:{"Content-Type":"application/json"},
     body:JSON.stringify({target,body,apiKey,method}),
   });
   const text=await r.text();
   let d={};try{d=JSON.parse(text);}catch{}
-  if(!r.ok)throw new Error(d.error||d.message||`Instantly ${r.status}: ${text.slice(0,200)}`);
+  if(!r.ok)throw new Error(d.error||d.message||`Reply.io ${r.status}: ${text.slice(0,200)}`);
   return d;
 }
-async function instantlyCreateCampaign(apiKey,campaignName,contacts,emailSteps){
-  if(!apiKey)throw new Error("No Instantly v2 API key - generate one at Instantly → Settings → API Keys");
+async function replyPushCampaign(apiKey,campaignName,contacts,emailSteps){
+  if(!apiKey)throw new Error("No Reply.io API key - get one from Reply.io → Settings → API");
   if(!emailSteps?.length)throw new Error("No email steps to push");
 
-  // Build sequences: delay = days interval between steps (not absolute day)
-  // emailSteps[i].day is absolute day, so interval = day[i] - day[i-1]
+  // Step 1: Create campaign in Reply.io
+  // Reply.io campaign = {name, owned_by (optional)}
+  const camp=await replyProxy(apiKey,"/campaigns",{
+    name:campaignName,
+    owned_by:null,
+  });
+  // Reply.io returns the campaign object; id varies by version
+  const campaignId=camp.id||camp.campaignId||camp.data?.id;
+  if(!campaignId)throw new Error("Reply.io campaign created but no ID returned. Check API key permissions.");
+
+  // Step 2: Add email steps as campaign sequence steps
+  // Reply.io: POST /campaigns/{id}/emailaccounts is for senders
+  // Steps are added via PUT /campaigns/{id} with steps array
+  // Each step: {type:"email", subject, body, delay (days from previous)}
   const steps=emailSteps.map((s,i)=>({
     type:"email",
-    delay:i===0?0:Math.max(1,((emailSteps[i].day||1)-(emailSteps[i-1].day||1))),
-    variants:[{subject:s.subject||"Following up",body:emailToHtml(s.body||"")}],
+    subject:s.subject||"Following up",
+    body:emailToHtml(s.body||""),
+    delay:i===0?0:Math.max(1,(emailSteps[i].day||1)-(emailSteps[i-1].day||1)),
   }));
+  await replyProxy(apiKey,`/campaigns/${campaignId}`,[...steps],"PUT");
 
-  // Step 1: Create campaign with sequences embedded (v2 format)
-  const camp=await instantlyProxy(apiKey,"/api/v2/campaigns",{
-    name:campaignName,
-    campaign_schedule:{
-      schedules:[{
-        name:"Business Hours",
-        timing:{from:"09:00",to:"17:00"},
-        days:{"0":false,"1":true,"2":true,"3":true,"4":true,"5":true,"6":false}, // Mon-Fri
-        timezone:"America/Dawson", // Pacific Time equivalent (America/Los_Angeles not in Instantly's allowed list)
-      }],
-    },
-    sequences:[{steps}],
-  });
-  const campaignId=camp.id;
-  if(!campaignId)throw new Error("Campaign created but no ID returned");
-
-  // Step 2: Add all contacts in ONE bulk call - correct endpoint is /api/v2/leads/add
-  // campaign_id goes at top level, leads is an array - NOT campaign_id inside each lead
+  // Step 3: Add contacts (people) to the campaign
+  // Reply.io: POST /people to create contact, then POST /campaigns/{id}/people to add to campaign
   const validContacts=contacts.filter(c=>c.email&&c.email!=="Not found"&&c.email!==null&&c.email.includes("@"));
-  let addResult=null;
-  if(validContacts.length){
-    const leadsPayload={
-      campaign_id:campaignId,
-      leads:validContacts.map(c=>{
-        const cleanName=(c.name&&c.name!=="Unknown")?c.name.trim():"";
-        const parts=cleanName.split(" ").filter(Boolean);
-        // If no name, derive first name from email prefix: alex.smith@co.com → Alex
-        const emailPrefix=c.email?.split("@")[0]?.split(/[._+\-]/)[0]||"";
-        const emailFirst=emailPrefix?emailPrefix.charAt(0).toUpperCase()+emailPrefix.slice(1).toLowerCase():"";
-        return {
-          email:c.email,
-          first_name:parts[0]||emailFirst||"",
-          last_name:parts.slice(1).join(" ")||"",
-          company_name:c.company||"",
-          phone:(c.phone&&c.phone!=="Not found")?c.phone:"",
-          website:c.linkedin||"",
-        };
-      }),
-    };
-    addResult=await instantlyProxy(apiKey,"/api/v2/leads/add",leadsPayload);
-    console.log("Instantly leads/add result:",addResult);
-    if(addResult.leads_uploaded===0&&validContacts.length>0){
-      console.warn("Leads sent but 0 uploaded:",addResult);
+  let addedCount=0;
+  for(const ct of validContacts){
+    const cleanName=(ct.name&&ct.name!=="Unknown")?ct.name.trim():"";
+    const parts=cleanName.split(" ").filter(Boolean);
+    const emailPrefix=ct.email?.split("@")[0]?.split(/[._+-]/)[0]||"";
+    const emailFirst=emailPrefix?emailPrefix.charAt(0).toUpperCase()+emailPrefix.slice(1).toLowerCase():"";
+    try{
+      // Create or find person
+      const person=await replyProxy(apiKey,"/people",{
+        email:ct.email,
+        firstName:parts[0]||emailFirst||"",
+        lastName:parts.slice(1).join(" ")||"",
+        companyName:ct.company||"",
+        phone:(ct.phone&&ct.phone!=="Not found")?ct.phone:"",
+        linkedInProfile:ct.linkedin||"",
+      });
+      const personId=person.id||person.personId||person.data?.id;
+      if(personId){
+        // Add person to campaign
+        await replyProxy(apiKey,`/campaigns/${campaignId}/people`,{personId});
+        addedCount++;
+      }
+    }catch(e){
+      console.warn(`Reply.io: could not add contact ${ct.email}:`,e.message);
     }
   }
-  return {campaignId, addResult};
+  return {campaignId, addedCount, totalContacts:validContacts.length};
 }
 
 // ── Claude AI ──
@@ -478,7 +476,7 @@ function LogPanel({log=[],isOwner=false,isAdmin=false}){
   const ic={saved:<Bookmark size={10}/>,enriched:<TrendingUp size={10}/>,discovered:<Search size={10}/>,"outreach generated":<Mail size={10}/>};
   const getIcon=(action)=>{
     if(ic[action])return ic[action];
-    if(action.startsWith("pushed to Instantly"))return<Send size={10}/>;
+    if(action.startsWith("pushed to Reply.io"))return<Send size={10}/>;
     return<Activity size={10}/>;
   };
   return(
@@ -488,13 +486,13 @@ function LogPanel({log=[],isOwner=false,isAdmin=false}){
         {open?<ChevronDown size={11}/>:<ChevronRight size={11}/>}
       </button>
       {open&&<div className="mt-2 space-y-2">{[...log].reverse().map((e,i)=>{
-          const isInstantly=e.action.startsWith("pushed to Instantly");
-          return(<div key={i} className={`flex items-start gap-2 text-xs rounded-lg p-2 ${isInstantly?"bg-emerald-50 border border-emerald-100":"bg-slate-50"}`}>
-            <span className={`w-4 h-4 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 ${isInstantly?"bg-emerald-100 text-emerald-600":"bg-slate-200 text-slate-500"}`}>{getIcon(e.action)}</span>
+          const isReply=e.action.startsWith("pushed to Reply.io");
+          return(<div key={i} className={`flex items-start gap-2 text-xs rounded-lg p-2 ${isReply?"bg-emerald-50 border border-emerald-100":"bg-slate-50"}`}>
+            <span className={`w-4 h-4 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 ${isReply?"bg-emerald-100 text-emerald-600":"bg-slate-200 text-slate-500"}`}>{getIcon(e.action)}</span>
             <div className="flex-1 min-w-0">
               <span className="font-semibold text-slate-700">{e.user}</span>
               <span className="text-slate-400 mx-1">·</span>
-              <span className={`break-words ${isInstantly?"text-emerald-800 font-medium":"text-slate-500"}`}>{e.action}</span>
+              <span className={`break-words ${isReply?"text-emerald-800 font-medium":"text-slate-500"}`}>{e.action}</span>
             </div>
             <span className="text-slate-400 flex-shrink-0 whitespace-nowrap">{fmt(e.timestamp)}</span>
           </div>);
@@ -503,21 +501,21 @@ function LogPanel({log=[],isOwner=false,isAdmin=false}){
   );
 }
 
-// ── Instantly Tags ──
-function InstantlyTags({user}){
+// ── Reply.io Tags ──
+function ReplyTags({user}){
   const [copied,setCopied]=useState("");
   const sig=`${user.displayName}\n${user.title||"Account Manager"}\nEvolve ESolutions\n${user.email||""} | ${user.phone||""}\nevolveesolutions.com`;
   const tags=[{key:"{{firstName}}",val:"[Lead first name]",lbl:"Lead first name"},{key:"{{accountSignature}}",val:"[Mailbox signature]",lbl:"Mailbox signature"}];
   function cp(val,k){navigator.clipboard.writeText(val);setCopied(k);setTimeout(()=>setCopied(""),2000);}
   return(
     <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4 mb-5">
-      <div className="flex items-center gap-2 mb-3"><Tag size={13} className="text-indigo-500"/><span className="text-xs font-semibold text-indigo-700 uppercase tracking-wide">Instantly.ai merge tags</span><span className="text-xs text-indigo-400">— paste into Instantly template fields</span></div>
+      <div className="flex items-center gap-2 mb-3"><Tag size={13} className="text-indigo-500"/><span className="text-xs font-semibold text-indigo-700 uppercase tracking-wide">Reply.io merge tags</span><span className="text-xs text-indigo-400">— paste into Reply.io template fields</span></div>
       <div className="flex flex-wrap gap-2 mb-3">
         {tags.map(t=><button key={t.key} onClick={()=>cp(t.key,t.key)} title={`Copies tag: ${t.key}\nValue: ${t.val}`} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono font-medium border transition-all ${copied===t.key?"bg-indigo-600 text-white border-indigo-600":"bg-white text-indigo-700 border-indigo-200 hover:border-indigo-400"}`}>{copied===t.key?<CheckCircle2 size={11}/>:<Copy size={11}/>}{t.key}</button>)}
         <button onClick={()=>cp(sig,"sig")} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${copied==="sig"?"bg-indigo-600 text-white border-indigo-600":"bg-white text-indigo-600 border-indigo-200 hover:border-indigo-400"}`}>{copied==="sig"?<CheckCircle2 size={11}/>:<Copy size={11}/>}Copy signature text</button>
       </div>
       <details><summary className="text-xs text-indigo-400 cursor-pointer hover:text-indigo-600">Preview your signature</summary><pre className="mt-2 text-xs text-indigo-800 bg-white border border-indigo-100 rounded-lg p-3 whitespace-pre-wrap font-sans">{sig}</pre></details>
-      <p className="text-xs text-indigo-400 mt-2">Click any tag → copy it → paste into Instantly's template editor. Instantly auto-replaces with each sender's real details at send time.</p>
+      <p className="text-xs text-indigo-400 mt-2">Click any tag → copy it → paste into Reply.io's template editor. Reply.io auto-replaces with each sender's real details at send time.</p>
     </div>
   );
 }
@@ -744,7 +742,7 @@ function NicheIndustryManager({niches,industries,onSaveNiches,onSaveIndustries,s
 // ══ SETTINGS (admin only) ══
 function SettingsView({settings,onSave,users,onAdd,onRemove,onPwReset,cu,niches,industries,onSaveNiches,onSaveIndustries}){
   const [settingsTab,setSettingsTab]=useState("keys");
-  const [f,setF]=useState({anthropicKey:settings.anthropicKey||"",elevenLabsKey:settings.elevenLabsKey||"",elevenLabsVoiceId:settings.elevenLabsVoiceId||"pNInz6obpgDQGcFmaJgB",supabaseUrl:settings.supabaseUrl||"",supabaseKey:settings.supabaseKey||"",apolloKey:settings.apolloKey||"",instantlyV2Key:settings.instantlyV2Key||"",serpKey:settings.serpKey||"",hunterKey:settings.hunterKey||""});
+  const [f,setF]=useState({anthropicKey:settings.anthropicKey||"",elevenLabsKey:settings.elevenLabsKey||"",elevenLabsVoiceId:settings.elevenLabsVoiceId||"pNInz6obpgDQGcFmaJgB",supabaseUrl:settings.supabaseUrl||"",supabaseKey:settings.supabaseKey||"",apolloKey:settings.apolloKey||"",replyApiKey:settings.replyApiKey||"",serpKey:settings.serpKey||"",hunterKey:settings.hunterKey||""});
   const [saved,setSaved]=useState(false);
   const [nu,setNu]=useState({username:"",displayName:"",title:"",email:"",phone:"",password:""});
   const [addErr,setAddErr]=useState("");
@@ -784,14 +782,14 @@ function SettingsView({settings,onSave,users,onAdd,onRemove,onPwReset,cu,niches,
             <F lbl="Supabase anon key" k="supabaseKey" ph="eyJ..." secret/>
             <F lbl="Apollo.io API key" k="apolloKey" ph="..." secret hint="apollo.io → Settings → API Keys (coming soon)"/>
             <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 mb-3">
-              <p className="text-xs text-amber-700 font-semibold mb-1">⚠️ Instantly requires a v2 API key</p>
-              <p className="text-xs text-amber-600">Go to Instantly → Settings → API Keys → Create API Key → select scopes: campaigns:all + leads:all → copy the key below.</p>
+              <p className="text-xs text-amber-700 font-semibold mb-1">⚠️ Reply.io API key required</p>
+              <p className="text-xs text-slate-500">Get your API key from Reply.io → Settings → API → copy the key below.</p>
             </div>
-            <F lbl="Instantly.ai API key (v2)" k="instantlyV2Key" ph="inst_v2_..." secret hint="Must be a v2 key - v1 keys will return Unauthorized"/>
+            <F lbl="Reply.io API key" k="replyApiKey" ph="..." secret hint="Reply.io → Settings → API → copy key"/>
             <div className="border-t border-slate-100 my-4"/>
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Discover Enhancement</p>
             <F lbl="SerpAPI key" k="serpKey" ph="..." secret hint="serpapi.com → Dashboard → API Key - enables real Google search results in Discover ($50/mo, 5k searches)"/>
-            <F lbl="Hunter.io API key" k="hunterKey" ph="..." secret hint="hunter.io → API → API Key - verifies contact emails before pushing to Instantly (free 25/mo, $49/mo after)"/>
+            <F lbl="Hunter.io API key" k="hunterKey" ph="..." secret hint="hunter.io → API → API Key - verifies contact emails before pushing to Reply.io"/>
             <button onClick={saveKeys} className="w-full py-2.5 rounded-xl bg-slate-800 text-white text-sm font-medium hover:bg-slate-700 flex items-center justify-center gap-2">{saved?<><CheckCircle2 size={14}/>Saved!</>:<><Key size={14}/>Save API keys</>}</button>
           </div>
           <div className="bg-amber-50 border border-amber-100 rounded-2xl p-5">
@@ -2067,16 +2065,16 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
     // Load push history from Supabase
     if(settings?.supabaseUrl&&settings?.supabaseKey){
       sbLoadOutreach(settings.supabaseUrl,settings.supabaseKey,company.name)
-        .then(rows=>setHistory(rows.filter(r=>r.instantly_campaign_id)));
+        .then(rows=>setHistory(rows.filter(r=>r.reply_campaign_id)));
     }
   },[company.name,iPushed]);
   const aRefs=useRef({});
-  const instantlyKey=settings?.instantlyV2Key||settings?.instantlyKey||"";
+  const replyKey=settings?.replyApiKey||"";
   useEffect(()=>{sg(`enr_${company.name.toLowerCase().replace(/\s+/g,"_")}`).then(d=>{if(d?.keyContacts){setLiC(d.keyContacts.filter(c=>c.linkedin&&c.linkedin.length>5));setPhC(d.keyContacts);}});},[company.name]);
   const E=`Evolve ESolutions - IT, HR, Healthcare, Financial Services, Legal recruitment, Pleasanton CA. 24-48hr screened candidates. Passive talent. No placement no fee. 1-3 day onboarding.`;
   const iMap={"Technology / SaaS":"IT/software","Financial Services":"finance/compliance","Healthcare":"healthcare/clinical","Legal":"legal/paralegal","Manufacturing":"engineering/ops","E-commerce / Retail":"tech/ops","Construction":"project management","Professional Services":"professional/admin","Media & Marketing":"creative/marketing","Logistics & Supply Chain":"ops/tech"};
   const spec=iMap[company.industry]||company.industry;
-  // Emails use Instantly merge tags - sender name and signature injected per mailbox
+  // Emails use Reply.io merge tags - sender name and signature injected per mailbox
   const placeholderSig="{{accountSignature}}";
   // Map step labels to prompt types
   function getStepPromptType(stepLabel){
@@ -2140,7 +2138,7 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
       const subj=subLine.replace(/^subject:\s*/i,"").trim();
       const bodyLines=lines.slice(lines.indexOf(subLine)+2);
       const body=bodyLines.join("\n").trim();
-      // Store in generatedSteps map so Push to Instantly can use without re-generating
+      // Store in generatedSteps map so Push to Reply.io can use without re-generating
       setGeneratedSteps(prev=>{
         const next={...prev,[s.label]:{subject:subj,body,day:s.day,label:s.label}};
         try{localStorage.setItem(outreachCacheKey,JSON.stringify(next));}catch{}
@@ -2155,8 +2153,8 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
     setLoading(false);
   }
 
-  async function pushToInstantly(){
-    if(!instantlyKey){setIErr("Add Instantly API key in Settings first.");return;}
+  async function pushToReply(){
+    if(!replyKey){setIErr("Add Reply.io API key in Settings first.");return;}
     // Use already-generated steps - no re-generation needed (avoids rate limit)
     const emailSteps=tmpl.steps.filter(s=>s.type==="email");
     const missing=emailSteps.filter(s=>!generatedSteps[s.label]);
@@ -2209,17 +2207,17 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
           :`${allContacts.length} contact${allContacts.length!==1?"s":""} found but none have verified email addresses. Edit contacts in Enrich to add emails.`;
         setIErr(reason);setIPushing(false);return;
       }
-      const campaignName=`Evolve - ${company.name} - ${new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`;
-      const pushResult=await instantlyCreateCampaign(instantlyKey,campaignName,contacts,steps);
+      const campaignName=`EVL-AI-Client - ${company.name} - ${tmpl.label} - ${new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`;
+      const pushResult=await replyPushCampaign(replyKey,campaignName,contacts,steps);
       const campaignId=pushResult.campaignId||pushResult;
       if(pushResult.addResult)setIResult(pushResult.addResult);
-      onLogAct(company,`pushed to Instantly - ${tmpl.label} - ${contacts.length} contact${contacts.length!==1?"s":""} - ID: ${campaignId}`);
+      onLogAct(company,`pushed to Reply.io - ${tmpl.label} - ${contacts.length} contact${contacts.length!==1?"s":""} - ID: ${campaignId}`);
       setIPushed(campaignId);
       // Save full sequence to DB
       if(settings?.supabaseUrl&&settings?.supabaseKey){
         sbSaveOutreach(settings.supabaseUrl,settings.supabaseKey,company.name,cu.username,cu.displayName,tmpl.id,steps,campaignId,contacts.length);
       }
-    }catch(e){setIErr(`Instantly push failed: ${e.message}`);}
+    }catch(e){setIErr(`Reply.io push failed: ${e.message}`);}
     setIPushing(false);
   }
   async function genLi(c,i){setLiLoad(p=>({...p,[i]:true}));const t=await ai(`LinkedIn connection note from Evolve ESolutions to ${c.name}, ${c.title} at ${company.name}. Context: ${company.signal}. Max 300 chars. Warm, peer-to-peer, specific hook, no cliches. Return ONLY note text.`).catch(()=>"Error.");setLiMsg(p=>({...p,[i]:t.trim()}));setLiLoad(p=>({...p,[i]:false}));}
@@ -2256,20 +2254,20 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
           {company.website&&<a href={`https://${company.website}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"><Globe size={11}/>{company.website}</a>}
           </div><button onClick={()=>onSave(company)} className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium border transition-all ${isSaved?"bg-slate-800 text-white border-slate-800":"border-slate-200 text-slate-700 hover:border-slate-400"}`}>{isSaved?<><BookmarkCheck size={14}/>Saved</>:<><Bookmark size={14}/>Save</>}</button></div>
 
-      <InstantlyTags user={cu}/>
+      <ReplyTags user={cu}/>
 
-      {/* Instantly campaign push */}
+      {/* Reply.io campaign push */}
       <div className={`rounded-xl border px-4 py-3 mb-5 flex items-center justify-between gap-4 ${iPushed?"bg-emerald-50 border-emerald-100":"bg-slate-50 border-slate-200"}`}>
         <div className="flex-1 min-w-0">
           {iPushed?(
-            <div className="flex items-center gap-2"><CheckCircle2 size={14} className="text-emerald-500 flex-shrink-0"/><div><p className="text-xs font-semibold text-emerald-700">Campaign draft created in Instantly</p><div>
-                <p className="text-xs text-emerald-600 font-medium">Campaign created - activate it in Instantly to start sending.</p>
+            <div className="flex items-center gap-2"><CheckCircle2 size={14} className="text-emerald-500 flex-shrink-0"/><div><p className="text-xs font-semibold text-emerald-700">Campaign created in Reply.io</p><div>
+                <p className="text-xs text-emerald-600 font-medium">Campaign created - activate it in Reply.io to start sending.</p>
                 <p className="text-xs text-emerald-500 mt-0.5">ID: {iPushed}</p>
                 <p className="text-xs text-emerald-500">{iSent} lead{iSent!==1?"s":""} added{iSkipped>0?` - ${iSkipped} skipped (no email)`:""}</p>
               </div></div></div>
           ):(
             <div>
-              <p className="text-xs font-semibold text-slate-700">Push full sequence to Instantly</p>
+              <p className="text-xs font-semibold text-slate-700">Push full sequence to Reply.io</p>
               <p className="text-xs text-slate-500">{(()=>{const total=tmpl.steps.filter(s=>s.type==="email").length;const ready=Object.keys(generatedSteps).length;return ready>=total?`All ${total} steps ready to push`:`${ready}/${total} steps generated - click each step to generate before pushing`;})()}</p>
               <ContactPreview company={company} settings={settings}/>
             </div>
@@ -2277,16 +2275,16 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
           {iErr&&<div className="mt-1">
             <p className="text-xs text-red-600">{iErr}</p>
             {iErr.includes("Unauthorized")&&<p className="text-xs text-amber-700 mt-1 bg-amber-50 border border-amber-100 rounded-lg px-2 py-1">
-              ⚠️ Your key is a v1 key. Go to Instantly → Settings → API Keys → Create new API Key (v2) with scopes: campaigns:all + leads:all → paste new key in Settings.
+              ⚠️ Your key is a v1 key. Get your key from Reply.io → Settings → API with scopes: campaigns:all + leads:all → paste new key in Settings.
             </p>}
           </div>}
         </div>
-        {instantlyKey?(
-          <button onClick={pushToInstantly} disabled={iPushing} className="flex items-center gap-1.5 px-4 py-2 bg-slate-800 text-white rounded-xl text-xs font-medium hover:bg-slate-700 disabled:opacity-60 flex-shrink-0 whitespace-nowrap">
-            {iPushing?<><Loader2 size={12} className="animate-spin"/>Generating & pushing…</>:iPushed?<><RefreshCw size={12}/>Push again</>:<><Mail size={12}/>Push to Instantly</>}
+        {replyKey?(
+          <button onClick={pushToReply} disabled={iPushing} className="flex items-center gap-1.5 px-4 py-2 bg-slate-800 text-white rounded-xl text-xs font-medium hover:bg-slate-700 disabled:opacity-60 flex-shrink-0 whitespace-nowrap">
+            {iPushing?<><Loader2 size={12} className="animate-spin"/>Generating & pushing…</>:iPushed?<><RefreshCw size={12}/>Push again</>:<><Mail size={12}/>Push to Reply.io</>}
           </button>
         ):(
-          <span className="text-xs text-slate-400 flex-shrink-0">Add Instantly key in Settings</span>
+          <span className="text-xs text-slate-400 flex-shrink-0">Add Reply.io key in Settings</span>
         )}
       </div>
 
@@ -2371,7 +2369,7 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
                 </div>
                 <div className="flex items-center gap-3 mt-1">
                   <span className="text-xs text-slate-400">{h.pushed_at?new Date(h.pushed_at).toLocaleString("en-US",{month:"short",day:"numeric",year:"numeric",hour:"2-digit",minute:"2-digit"}):new Date(h.created_at).toLocaleString("en-US",{month:"short",day:"numeric",year:"numeric",hour:"2-digit",minute:"2-digit"})}</span>
-                  {h.instantly_campaign_id&&<a href={`https://app.instantly.ai/app/campaigns/${h.instantly_campaign_id}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"><Globe size={10}/>View in Instantly</a>}
+                  {h.reply_campaign_id&&<a href={`https://app.reply.io/${h.reply_campaign_id}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"><Globe size={10}/>View in Reply.io</a>}
                 </div>
               </div>
             </div>
