@@ -2237,9 +2237,24 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
       }
       const campaignName=`EVL-AI-Client - ${company.name} - ${tmpl.label} - ${new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`;
       const pushResult=await replyPushCampaign(replyKey,campaignName,contacts,steps,selectedCampaignId);
-      const campaignId=pushResult.campaignId||pushResult;
+      // Reply.io v1 API creates contacts but cannot enrol in sequences directly
+      // Auto-download a CSV formatted for Reply.io campaign import
+      const csvRows=["First Name,Last Name,Email,Company,Phone,Title"];
+      contacts.forEach(ct=>{
+        const parts=(ct.name||"").trim().split(" ");
+        const fn=parts[0]||"";const ln=parts.slice(1).join(" ")||"";
+        csvRows.push([fn,ln,ct.email||"",ct.company||company.name,ct.phone&&ct.phone!=="Not found"?ct.phone:"",ct.title||""]
+          .map(v=>`"${String(v).replace(/"/g,'""')}"`).join(","));
+      });
+      const csvBlob=new Blob([csvRows.join("\n")],{type:"text/csv"});
+      const csvUrl=URL.createObjectURL(csvBlob);
+      const a=document.createElement("a");
+      a.href=csvUrl;a.download=`${campaignName.replace(/[^a-z0-9]/gi,"-")}.csv`;
+      document.body.appendChild(a);a.click();document.body.removeChild(a);
+      URL.revokeObjectURL(csvUrl);
+      const campaignId=selectedCampaignId;
       if(pushResult.addResult)setIResult(pushResult.addResult);
-      onLogAct(company,`pushed to Reply.io - ${tmpl.label} - ${contacts.length} contact${contacts.length!==1?"s":""} - ID: ${campaignId}`);
+      onLogAct(company,`pushed to Reply.io - ${tmpl.label} - ${contacts.length} contact${contacts.length!==1?"s":""} - Campaign: ${selectedCampaignId}`);
       setIPushed(campaignId);
       // Save full sequence to DB
       if(settings?.supabaseUrl&&settings?.supabaseKey){
@@ -2300,9 +2315,9 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
         <div className="flex-1 min-w-0">
           {iPushed?(
             <div className="flex items-center gap-2"><CheckCircle2 size={14} className="text-emerald-500 flex-shrink-0"/><div><p className="text-xs font-semibold text-emerald-700">Campaign created in Reply.io</p><div>
-                <p className="text-xs text-emerald-600 font-medium">Campaign created - activate it in Reply.io to start sending.</p>
-                <p className="text-xs text-emerald-500 mt-0.5">ID: {iPushed}</p>
-                <p className="text-xs text-emerald-500">{iSent} lead{iSent!==1?"s":""} added{iSkipped>0?` - ${iSkipped} skipped (no email)`:""}</p>
+                <p className="text-xs text-emerald-600 font-medium">{iSent} contact{iSent!==1?"s":""} created in Reply.io + CSV downloaded</p>
+                <p className="text-xs text-emerald-700 font-semibold mt-1">Next step: Import the CSV into your Reply.io campaign to enrol contacts in the sequence</p>
+                <p className="text-xs text-emerald-500 mt-0.5">Reply.io → Campaigns → {replyCampaigns.find(c=>String(c.id)===String(iPushed))?.name||"Selected campaign"} → Import CSV</p>
               </div></div></div>
           ):(
             <div>
@@ -2320,7 +2335,7 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
         </div>
         {replyKey?(
           <button onClick={pushToReply} disabled={iPushing} className="flex items-center gap-1.5 px-4 py-2 bg-slate-800 text-white rounded-xl text-xs font-medium hover:bg-slate-700 disabled:opacity-60 flex-shrink-0 whitespace-nowrap">
-            {iPushing?<><Loader2 size={12} className="animate-spin"/>Generating & pushing…</>:iPushed?<><RefreshCw size={12}/>Push again</>:<><Mail size={12}/>Push to Reply.io</>}
+            {iPushing?<><Loader2 size={12} className="animate-spin"/>Creating contacts & CSV…</>:iPushed?<><RefreshCw size={12}/>Push again</>:<><Mail size={12}/>Create contacts + Download CSV</>}
           </button>
         ):(
           <span className="text-xs text-slate-400 flex-shrink-0">Add Reply.io key in Settings</span>
