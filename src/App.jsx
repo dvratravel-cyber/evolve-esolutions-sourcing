@@ -357,6 +357,45 @@ function emailToHtml(text){
     .join("");
 }
 // NOTE: Requires a Reply.io API key - get from Reply.io → Settings → API → Create Key (scopes: campaigns:all + leads:all)
+// ── Instantly.ai v2 ──
+async function instantlyProxy(apiKey,target,body,method="POST"){
+  const r=await fetch("/api/instantly",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({target,body,apiKey,method})});
+  const text=await r.text();let d={};try{d=JSON.parse(text);}catch{}
+  if(!r.ok)throw new Error(d.error||d.message||`Instantly ${r.status}: ${text.slice(0,200)}`);
+  return d;
+}
+async function instantlyCreateCampaign(apiKey,campaignName,contacts,emailSteps){
+  if(!apiKey)throw new Error("No Instantly v2 API key");
+  if(!emailSteps?.length)throw new Error("No email steps to push");
+  const steps=emailSteps.map((s,i)=>({
+    type:"email",delay:i===0?0:Math.max(1,(emailSteps[i].day||1)-(emailSteps[i-1].day||1)),
+    variants:[{subject:s.subject||"Following up",body:emailToHtml(s.body||"")}],
+  }));
+  const camp=await instantlyProxy(apiKey,"/api/v2/campaigns",{
+    name:campaignName,
+    campaign_schedule:{schedules:[{name:"Business Hours",timing:{from:"09:00",to:"17:00"},days:{"0":false,"1":true,"2":true,"3":true,"4":true,"5":true,"6":false},timezone:"America/Los_Angeles"}]},
+    sequences:[{steps}],
+  });
+  const campaignId=camp.id;
+  if(!campaignId)throw new Error("Campaign created but no ID returned");
+  const validContacts=contacts.filter(c=>c.email&&c.email!=="Not found"&&c.email!==null&&c.email.includes("@"));
+  let addResult=null;
+  if(validContacts.length){
+    const leadsPayload={
+      campaign_id:campaignId,
+      leads:validContacts.map(c=>{
+        const cleanName=(c.name&&c.name!=="Unknown")?c.name.trim():"";
+        const parts=cleanName.split(" ").filter(Boolean);
+        const emailPrefix=c.email?.split("@")[0]?.split(/[._+-]/)[0]||"";
+        const emailFirst=emailPrefix?emailPrefix.charAt(0).toUpperCase()+emailPrefix.slice(1).toLowerCase():"";
+        return{email:c.email,first_name:parts[0]||emailFirst||"",last_name:parts.slice(1).join(" ")||"",company_name:c.company||"",phone:(c.phone&&c.phone!=="Not found")?c.phone:"",website:c.linkedin||""};
+      }),
+    };
+    addResult=await instantlyProxy(apiKey,"/api/v2/leads/add",leadsPayload);
+  }
+  return{campaignId,addResult};
+}
+
 async function replyProxy(apiKey,target,body,method="POST"){
   const r=await fetch("/api/reply",{
     method:"POST",
@@ -737,7 +776,7 @@ function NicheIndustryManager({niches,industries,onSaveNiches,onSaveIndustries,s
 // ══ SETTINGS (admin only) ══
 function SettingsView({settings,onSave,users,onAdd,onRemove,onPwReset,cu,niches,industries,onSaveNiches,onSaveIndustries}){
   const [settingsTab,setSettingsTab]=useState("keys");
-  const [f,setF]=useState({anthropicKey:settings.anthropicKey||"",elevenLabsKey:settings.elevenLabsKey||"",elevenLabsVoiceId:settings.elevenLabsVoiceId||"pNInz6obpgDQGcFmaJgB",supabaseUrl:settings.supabaseUrl||"",supabaseKey:settings.supabaseKey||"",apolloKey:settings.apolloKey||"",replyApiKey:settings.replyApiKey||"",serpKey:settings.serpKey||"",hunterKey:settings.hunterKey||""});
+  const [f,setF]=useState({anthropicKey:settings.anthropicKey||"",elevenLabsKey:settings.elevenLabsKey||"",elevenLabsVoiceId:settings.elevenLabsVoiceId||"pNInz6obpgDQGcFmaJgB",supabaseUrl:settings.supabaseUrl||"",supabaseKey:settings.supabaseKey||"",apolloKey:settings.apolloKey||"",replyApiKey:settings.replyApiKey||"",instantlyV2Key:settings.instantlyV2Key||"",serpKey:settings.serpKey||"",hunterKey:settings.hunterKey||""});
   const [saved,setSaved]=useState(false);
   const [nu,setNu]=useState({username:"",displayName:"",title:"",email:"",phone:"",password:""});
   const [addErr,setAddErr]=useState("");
@@ -790,6 +829,9 @@ function SettingsView({settings,onSave,users,onAdd,onRemove,onPwReset,cu,niches,
               <p className="text-xs text-slate-500">Get your API key from Reply.io → Settings → API → copy the key below.</p>
             </div>
             <F lbl="Reply.io API key" k="replyApiKey" ph="..." secret hint="Reply.io → Settings → API → copy key"/>
+            <div className="border-t border-slate-100 my-2"/>
+            <p className="text-xs text-slate-500 mb-1">Instantly.ai v2 key — optional alternative to Reply.io. Instantly creates full campaigns with sequences automatically.</p>
+            <F lbl="Instantly.ai API key (v2)" k="instantlyV2Key" ph="inst_v2_..." secret hint="Instantly → Settings → API Keys → Create (scopes: campaigns:all + leads:all)"/>
             <div className="border-t border-slate-100 my-4"/>
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Discover Enhancement</p>
             <F lbl="SerpAPI key" k="serpKey" ph="..." secret hint="serpapi.com → Dashboard → API Key - enables real Google search results in Discover ($50/mo, 5k searches)"/>
@@ -2075,6 +2117,10 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
   },[company.name,iPushed]);
   const aRefs=useRef({});
   const replyKey=settings?.replyApiKey||"";
+  const instantlyKey=settings?.instantlyV2Key||"";
+  const [outreachPlatform,setOutreachPlatform]=useState(()=>instantlyKey?"instantly":"reply");
+  // Switch to available platform
+  useEffect(()=>{if(!replyKey&&instantlyKey)setOutreachPlatform("instantly");if(replyKey&&!instantlyKey)setOutreachPlatform("reply");},[replyKey,instantlyKey]);
   useEffect(()=>{
     if(!replyKey)return;
     setLoadingCampaigns(true);
@@ -2172,12 +2218,53 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
     setLoading(false);
   }
 
+  async function pushToInstantly(){
+    if(!instantlyKey){setIErr("Add Instantly v2 API key in Settings first.");return;}
+    setIPushing(true);setIErr("");setIPushed(false);
+    try{
+      const s=await sg(S_SETTINGS);
+      const hunterKey=s?.hunterKey;
+      let enriched=await sg(`enr_${company.name.toLowerCase().replace(/\s+/g,"_")}`);
+      if(!enriched?.keyContacts?.length&&settings?.supabaseUrl&&settings?.supabaseKey){
+        const slug=company.name.toLowerCase().replace(/\s+/g,"_");
+        const sbData=await sbLoadEnrichment(settings.supabaseUrl,settings.supabaseKey,slug);
+        if(sbData)enriched=sbData;
+      }
+      const allContacts=(enriched?.keyContacts||[]).map(ct=>({...ct,company:company.name}));
+      let rawContacts=allContacts.map(ct=>({...ct,email:(ct.email&&ct.email!=="Not found"&&ct.email.includes("@"))?ct.email:null})).filter(ct=>ct.email);
+      let contacts=rawContacts;
+      if(hunterKey&&rawContacts.length){
+        setIErr("Verifying emails with Hunter.io...");
+        const verified=await Promise.all(rawContacts.map(async ct=>{
+          try{const r=await fetch("/api/hunter",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:ct.email,apiKey:hunterKey})});
+          const d=await r.json();if(d.status==="invalid"&&(d.score||0)<30)return null;return{...ct,hunterStatus:d.status,hunterScore:d.score};}catch{return ct;}
+        }));
+        contacts=verified.filter(Boolean);setIErr("");
+      }
+      const skippedCount=allContacts.length-contacts.length;setISkipped(skippedCount);
+      if(!contacts.length){setIErr("No contacts with valid emails. Run Enrich first.");setIPushing(false);return;}
+      const emailOnlySteps=tmpl.steps.filter(s=>s.type==="email");
+      const steps=emailOnlySteps.map(s=>({day:s.day,label:s.label,subject:generatedSteps[s.label]?.subject||s.label,body:generatedSteps[s.label]?.body||""})).filter(s=>s.subject&&s.body);
+      if(!steps.length){setIErr("Generate email steps first before pushing.");setIPushing(false);return;}
+      const campaignName=`EVL-AI-Client - ${company.name} - ${tmpl.label} - ${new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`;
+      const pushResult=await instantlyCreateCampaign(instantlyKey,campaignName,contacts,steps);
+      const campaignId=pushResult.campaignId;
+      onLogAct(company,`pushed to Instantly - ${tmpl.label} - ${contacts.length} contact${contacts.length!==1?"s":""} - ID: ${campaignId}`);
+      setIPushed(campaignId);
+      setISent(contacts.length);
+      if(settings?.supabaseUrl&&settings?.supabaseKey){
+        sbSaveOutreach(settings.supabaseUrl,settings.supabaseKey,company.name,cu.username,cu.displayName,tmpl.id,steps,campaignId,contacts.length);
+      }
+    }catch(e){setIErr(`Instantly push failed: ${e.message}`);}
+    setIPushing(false);
+  }
+
   async function pushToReply(){
     if(!replyKey){setIErr("Add Reply.io API key in Settings first.");return;}
     // Warn if selected campaign has no email accounts
     const selCampaign=replyCampaigns.find(c=>String(c.id)===String(selectedCampaignId));
     if(selCampaign&&(!selCampaign.emailAccounts||selCampaign.emailAccounts.length===0)){
-      setIErr(`Campaign "${selCampaign.name}" has no email accounts connected. Go to Reply.io → this campaign → Settings → Email Accounts to connect one.`);
+      setIErr(`Campaign "${selCampaign.name}" has no email accounts connected. Go to Reply.io > this campaign > Settings > Email Accounts to connect one.`);
       return;
     }
     // Use already-generated steps - no re-generation needed (avoids rate limit)
@@ -2299,22 +2386,30 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
 
       <ReplyTags user={cu}/>
 
-      {/* Reply.io campaign push */}
-      {replyKey&&<div className="bg-white rounded-xl border border-slate-200 px-4 py-3 mb-3">
+      {/* Outreach platform selector */}
+      {(replyKey||instantlyKey)&&<div className="flex items-center gap-2 mb-3">
+        <span className="text-xs text-slate-400 font-medium">Push via:</span>
+        {replyKey&&<button onClick={()=>setOutreachPlatform("reply")} className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${outreachPlatform==="reply"?"bg-slate-800 text-white border-slate-800":"border-slate-200 text-slate-600 hover:border-slate-400"}`}>Reply.io</button>}
+        {instantlyKey&&<button onClick={()=>setOutreachPlatform("instantly")} className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${outreachPlatform==="instantly"?"bg-slate-800 text-white border-slate-800":"border-slate-200 text-slate-600 hover:border-slate-400"}`}>Instantly</button>}
+        {outreachPlatform==="instantly"&&<span className="text-xs text-slate-400 ml-1">Creates full campaign + sequence + leads automatically</span>}
+        {outreachPlatform==="reply"&&<span className="text-xs text-slate-400 ml-1">Creates contacts + downloads CSV for campaign import</span>}
+      </div>}
+      {/* Reply.io campaign picker */}
+      {outreachPlatform==="reply"&&replyKey&&<div className="bg-white rounded-xl border border-slate-200 px-4 py-3 mb-3">
         <div className="flex items-center gap-3">
           <label className="text-xs font-medium text-slate-500 whitespace-nowrap">Reply.io campaign:</label>
           {loadingCampaigns?<span className="text-xs text-slate-400">Loading campaigns...</span>:
           replyCampaigns.length?<select value={selectedCampaignId} onChange={e=>setSelectedCampaignId(e.target.value)} className="flex-1 px-3 py-1.5 rounded-lg border border-slate-200 text-xs bg-white focus:outline-none focus:border-slate-400">
             {replyCampaigns.map(camp=><option key={camp.id} value={String(camp.id)}>{camp.name}{camp.emailAccounts?.length?"":" (no email accounts)"}</option>)}
           </select>:
-          <span className="text-xs text-amber-600">No campaigns found — create one in Reply.io first</span>}
+          <span className="text-xs text-amber-600">No campaigns found - create one in Reply.io first</span>}
           <button onClick={()=>{setLoadingCampaigns(true);replyGetCampaigns(replyKey).then(list=>{setReplyCampaigns(list);if(list.length)setSelectedCampaignId(String(list[0].id));setLoadingCampaigns(false);});}} className="text-xs text-slate-400 hover:text-slate-600 px-2 py-1 border border-slate-200 rounded-lg" title="Refresh campaigns"><RefreshCw size={10}/></button>
         </div>
       </div>}
       <div className={`rounded-xl border px-4 py-3 mb-5 flex items-center justify-between gap-4 ${iPushed?"bg-emerald-50 border-emerald-100":"bg-slate-50 border-slate-200"}`}>
         <div className="flex-1 min-w-0">
           {iPushed?(
-            <div className="flex items-center gap-2"><CheckCircle2 size={14} className="text-emerald-500 flex-shrink-0"/><div><p className="text-xs font-semibold text-emerald-700">Campaign created in Reply.io</p><div>
+            <div className="flex items-center gap-2"><CheckCircle2 size={14} className="text-emerald-500 flex-shrink-0"/><div><p className="text-xs font-semibold text-emerald-700">{outreachPlatform==="instantly"?"Campaign created in Instantly":"Contacts created in Reply.io"}</p><div>
                 <p className="text-xs text-emerald-600 font-medium">{iSent} contact{iSent!==1?"s":""} created in Reply.io + CSV downloaded</p>
                 <p className="text-xs text-emerald-700 font-semibold mt-1">Next step: Import the CSV into your Reply.io campaign to enrol contacts in the sequence</p>
                 <p className="text-xs text-emerald-500 mt-0.5">Reply.io → Campaigns → {replyCampaigns.find(c=>String(c.id)===String(iPushed))?.name||"Selected campaign"} → Import CSV</p>
@@ -2333,12 +2428,12 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
             </p>}
           </div>}
         </div>
-        {replyKey?(
-          <button onClick={pushToReply} disabled={iPushing} className="flex items-center gap-1.5 px-4 py-2 bg-slate-800 text-white rounded-xl text-xs font-medium hover:bg-slate-700 disabled:opacity-60 flex-shrink-0 whitespace-nowrap">
-            {iPushing?<><Loader2 size={12} className="animate-spin"/>Creating contacts & CSV…</>:iPushed?<><RefreshCw size={12}/>Push again</>:<><Mail size={12}/>Create contacts + Download CSV</>}
+        {(replyKey||instantlyKey)?(
+          <button onClick={outreachPlatform==="instantly"?pushToInstantly:pushToReply} disabled={iPushing} className="flex items-center gap-1.5 px-4 py-2 bg-slate-800 text-white rounded-xl text-xs font-medium hover:bg-slate-700 disabled:opacity-60 flex-shrink-0 whitespace-nowrap">
+            {iPushing?<><Loader2 size={12} className="animate-spin"/>Pushing...</>:iPushed?<><RefreshCw size={12}/>Push again</>:outreachPlatform==="instantly"?<><Mail size={12}/>Push to Instantly</>:<><Mail size={12}/>Create contacts + Download CSV</>}
           </button>
         ):(
-          <span className="text-xs text-slate-400 flex-shrink-0">Add Reply.io key in Settings</span>
+          <span className="text-xs text-slate-400 flex-shrink-0">Add Reply.io or Instantly key in Settings</span>
         )}
       </div>
 
