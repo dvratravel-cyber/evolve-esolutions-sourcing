@@ -2404,7 +2404,13 @@ export default function App(){
   useEffect(()=>{
     Promise.all([sg(S_SESSION),sg(S_SETTINGS),sg(S_USERS),sg(S_LEADS)]).then(async([ses,s,u,l])=>{
       if(ses)setCu(ses);
-      const loadedSettings=s||{};
+      let loadedSettings=s||{};
+      // Migrate legacy instantlyV2Key → replyApiKey
+      if(loadedSettings.instantlyV2Key&&!loadedSettings.replyApiKey){
+        loadedSettings={...loadedSettings,replyApiKey:loadedSettings.instantlyV2Key};
+        delete loadedSettings.instantlyV2Key;
+        ss(S_SETTINGS,loadedSettings); // persist migration
+      }
       setSettings(loadedSettings);
       if(loadedSettings.anthropicKey) _anthropicKey=loadedSettings.anthropicKey;
       // Load from Supabase if connected, fallback to localStorage
@@ -2421,12 +2427,23 @@ export default function App(){
         else setUsers(u||[DEFAULT_ADMIN]);
         if(config?.niches?.length)setDynNiches(config.niches);
         if(config?.industries?.length)setDynIndustries(config.industries);
-        // Merge remote settings (API keys from Supabase) into local settings
+        // Merge settings: Supabase is source of truth for API keys
+        // Supabase wins over localStorage (except supabaseUrl/Key which must stay local)
         if(config?.settings){
-          const merged={...config.settings,...loadedSettings,supabaseUrl:loadedSettings.supabaseUrl,supabaseKey:loadedSettings.supabaseKey};
+          const merged={
+            ...loadedSettings,           // local base (has supabaseUrl+Key)
+            ...config.settings,          // Supabase overrides all API keys
+            supabaseUrl:loadedSettings.supabaseUrl,  // always keep local supabase creds
+            supabaseKey:loadedSettings.supabaseKey,
+          };
           setSettings(merged);
-          await ss(S_SETTINGS,merged);
+          await ss(S_SETTINGS,merged);   // sync merged back to localStorage
           if(merged.anthropicKey) _anthropicKey=merged.anthropicKey;
+        } else if(Object.keys(loadedSettings).length>2){
+          // No Supabase config yet but local settings exist — push them up
+          const {supabaseUrl,supabaseKey,...safeSettings}=loadedSettings;
+          if(supabaseUrl&&supabaseKey&&Object.keys(safeSettings).some(k=>safeSettings[k]))
+            saveConfigToSB(supabaseUrl,supabaseKey,"settings",safeSettings);
         }
       } else {
         setLeads(l||[]);
@@ -2439,6 +2456,11 @@ export default function App(){
   async function login(user){setCu(user);await ss(S_SESSION,{...user,password:undefined});setView("discover");}
   async function logout(){setCu(null);await ss(S_SESSION,null);}
   async function saveSettings(s){
+    // Migrate legacy instantlyV2Key → replyApiKey if present
+    if(s.instantlyV2Key&&!s.replyApiKey){
+      s={...s,replyApiKey:s.instantlyV2Key};
+      delete s.instantlyV2Key;
+    }
     setSettings(s);
     await ss(S_SETTINGS,s);
     if(s.anthropicKey) _anthropicKey=s.anthropicKey;
