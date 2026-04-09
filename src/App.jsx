@@ -84,6 +84,10 @@ const EMAIL_TYPES = [["intro","Cold intro"],["followup","Follow-up"],["casestudy
 const DEFAULT_ADMIN   = {id:"evadmin",username:"evadmin",password:"evolve2024",displayName:"Admin",title:"Administrator",email:"admin@evolveesolutions.com",phone:"925-252-5700",role:"admin",createdAt:new Date().toISOString()};
 
 // ── Storage ──
+// ── Supabase credentials — from Vercel env vars (VITE_ prefix baked in at build) ──
+const ENV_SB_URL  = import.meta.env.VITE_SUPABASE_URL  || "";
+const ENV_SB_KEY  = import.meta.env.VITE_SUPABASE_KEY  || "";
+
 // ── Adaptive storage - window.storage in Claude.ai, localStorage on Vercel ──
 async function sg(k){
   try{if(window.storage){const r=await window.storage.get(k);return r?JSON.parse(r.value):null;}}catch{}
@@ -778,8 +782,17 @@ function SettingsView({settings,onSave,users,onAdd,onRemove,onPwReset,cu,niches,
             </div>
             <F lbl="Anthropic API key" k="anthropicKey" ph="sk-ant-..." secret hint="console.anthropic.com → API Keys - required on Vercel, optional in Claude.ai"/>
             <F lbl="ElevenLabs Voice ID" k="elevenLabsVoiceId" ph="pNInz6obpgDQGcFmaJgB" hint="Default: Adam. Find others at elevenlabs.io/voice-library"/>
-            <F lbl="Supabase URL" k="supabaseUrl" ph="https://xxxx.supabase.co"/>
-            <F lbl="Supabase anon key" k="supabaseKey" ph="eyJ..." secret/>
+            {import.meta.env.VITE_SUPABASE_URL?(
+              <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2.5 mb-2">
+                <CheckCircle2 size={13} className="text-emerald-500 flex-shrink-0"/>
+                <span className="text-xs text-emerald-700 font-medium">Supabase connected via Vercel environment variables</span>
+              </div>
+            ):(
+              <div className="space-y-3">
+                <F lbl="Supabase URL" k="supabaseUrl" ph="https://xxxx.supabase.co"/>
+                <F lbl="Supabase anon key" k="supabaseKey" ph="eyJ..." secret/>
+              </div>
+            )}
             <F lbl="Apollo.io API key" k="apolloKey" ph="..." secret hint="apollo.io → Settings → API Keys (coming soon)"/>
             <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 mb-3">
               <p className="text-xs text-amber-700 font-semibold mb-1">⚠️ Reply.io API key required</p>
@@ -2409,7 +2422,13 @@ export default function App(){
       if(loadedSettings.instantlyV2Key&&!loadedSettings.replyApiKey){
         loadedSettings={...loadedSettings,replyApiKey:loadedSettings.instantlyV2Key};
         delete loadedSettings.instantlyV2Key;
-        ss(S_SETTINGS,loadedSettings); // persist migration
+        ss(S_SETTINGS,loadedSettings);
+      }
+      // Always inject env var Supabase creds — overrides whatever is in localStorage
+      // This means clearing cache never loses the Supabase connection
+      if(ENV_SB_URL){
+        loadedSettings={...loadedSettings,supabaseUrl:ENV_SB_URL,supabaseKey:ENV_SB_KEY};
+        ss(S_SETTINGS,loadedSettings);
       }
       setSettings(loadedSettings);
       if(loadedSettings.anthropicKey) _anthropicKey=loadedSettings.anthropicKey;
