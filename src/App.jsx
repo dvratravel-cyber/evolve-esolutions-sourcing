@@ -373,7 +373,7 @@ async function instantlyCreateCampaign(apiKey,campaignName,contacts,emailSteps){
   }));
   const camp=await instantlyProxy(apiKey,"/api/v2/campaigns",{
     name:campaignName,
-    campaign_schedule:{schedules:[{name:"Business Hours",timing:{from:"09:00",to:"17:00"},days:{"0":false,"1":true,"2":true,"3":true,"4":true,"5":true,"6":false},timezone:"America/Los_Angeles"}]},
+    campaign_schedule:{schedules:[{name:"Business Hours",timing:{from:"09:00",to:"17:00"},days:{"0":false,"1":true,"2":true,"3":true,"4":true,"5":true,"6":false},timezone:"America/Dawson"}]},
     sequences:[{steps}],
   });
   const campaignId=camp.id;
