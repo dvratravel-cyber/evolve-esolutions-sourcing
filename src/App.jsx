@@ -2080,7 +2080,12 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
     setLoadingCampaigns(true);
     replyGetCampaigns(replyKey).then(list=>{
       setReplyCampaigns(list);
-      if(list.length&&!selectedCampaignId)setSelectedCampaignId(String(list[0].id));
+      if(list.length&&!selectedCampaignId){
+        // Prefer first campaign with email accounts
+        const withAccounts=list.filter(c=>c.emailAccounts?.length>0);
+        const first=withAccounts[0]||list[0];
+        setSelectedCampaignId(String(first.id));
+      }
       setLoadingCampaigns(false);
     });
   },[replyKey]);
@@ -2169,6 +2174,12 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
 
   async function pushToReply(){
     if(!replyKey){setIErr("Add Reply.io API key in Settings first.");return;}
+    // Warn if selected campaign has no email accounts
+    const selCampaign=replyCampaigns.find(c=>String(c.id)===String(selectedCampaignId));
+    if(selCampaign&&(!selCampaign.emailAccounts||selCampaign.emailAccounts.length===0)){
+      setIErr(`Campaign "${selCampaign.name}" has no email accounts connected. Go to Reply.io → this campaign → Settings → Email Accounts to connect one.`);
+      return;
+    }
     // Use already-generated steps - no re-generation needed (avoids rate limit)
     const emailSteps=tmpl.steps.filter(s=>s.type==="email");
     const missing=emailSteps.filter(s=>!generatedSteps[s.label]);
@@ -2203,7 +2214,10 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
             const r=await fetch("/api/hunter",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:ct.email,apiKey:hunterKey})});
             const d=await r.json();
             // valid or accept_all = keep; invalid = drop; unknown = keep with warning
-            if(d.status==="invalid"){return null;}
+            // Only drop if CLEARLY invalid - score < 30 AND status invalid
+            // accept_all/unknown/valid → always keep
+            // invalid with score >= 30 → probably still valid (Hunter can be wrong on corporate domains)
+            if(d.status==="invalid"&&(d.score||0)<30){return null;}
             return {...ct,hunterStatus:d.status,hunterScore:d.score};
           }catch{return ct;} // if Hunter fails, keep contact anyway
         }));
@@ -2276,7 +2290,7 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
           <label className="text-xs font-medium text-slate-500 whitespace-nowrap">Reply.io campaign:</label>
           {loadingCampaigns?<span className="text-xs text-slate-400">Loading campaigns...</span>:
           replyCampaigns.length?<select value={selectedCampaignId} onChange={e=>setSelectedCampaignId(e.target.value)} className="flex-1 px-3 py-1.5 rounded-lg border border-slate-200 text-xs bg-white focus:outline-none focus:border-slate-400">
-            {replyCampaigns.map(camp=><option key={camp.id} value={String(camp.id)}>{camp.name}</option>)}
+            {replyCampaigns.map(camp=><option key={camp.id} value={String(camp.id)}>{camp.name}{camp.emailAccounts?.length?"":" (no email accounts)"}</option>)}
           </select>:
           <span className="text-xs text-amber-600">No campaigns found — create one in Reply.io first</span>}
           <button onClick={()=>{setLoadingCampaigns(true);replyGetCampaigns(replyKey).then(list=>{setReplyCampaigns(list);if(list.length)setSelectedCampaignId(String(list[0].id));setLoadingCampaigns(false);});}} className="text-xs text-slate-400 hover:text-slate-600 px-2 py-1 border border-slate-200 rounded-lg" title="Refresh campaigns"><RefreshCw size={10}/></button>
