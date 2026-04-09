@@ -85,8 +85,9 @@ const DEFAULT_ADMIN   = {id:"evadmin",username:"evadmin",password:"evolve2024",d
 
 // ── Storage ──
 // ── Supabase credentials — from Vercel env vars (VITE_ prefix baked in at build) ──
-const ENV_SB_URL  = import.meta.env.VITE_SUPABASE_URL  || "";
-const ENV_SB_KEY  = import.meta.env.VITE_SUPABASE_KEY  || "";
+// Safe env var access — works in Vite builds AND direct module load
+const ENV_SB_URL = (()=>{ try{ return import.meta.env.VITE_SUPABASE_URL||""; }catch{ return ""; } })();
+const ENV_SB_KEY = (()=>{ try{ return import.meta.env.VITE_SUPABASE_KEY||""; }catch{ return ""; } })();
 
 // ── Adaptive storage - window.storage in Claude.ai, localStorage on Vercel ──
 async function sg(k){
@@ -367,62 +368,52 @@ async function replyProxy(apiKey,target,body,method="POST"){
   if(!r.ok)throw new Error(d.error||d.message||`Reply.io ${r.status}: ${text.slice(0,200)}`);
   return d;
 }
-async function replyPushCampaign(apiKey,campaignName,contacts,emailSteps){
+async function replyPushCampaign(apiKey,campaignName,contacts,emailSteps,campaignId){
+  // Reply.io v1 API:
+  // - Campaigns CANNOT be created via API - must pre-exist in Reply.io UI
+  // - Contacts are pushed via POST /people with campaignId in the body
+  // - campaignId must be passed in from user selection
   if(!apiKey)throw new Error("No Reply.io API key - get one from Reply.io → Settings → API");
-  if(!emailSteps?.length)throw new Error("No email steps to push");
+  if(!campaignId)throw new Error("No Reply.io campaign selected. Choose a campaign from the dropdown below.");
 
-  // Step 1: Create campaign in Reply.io
-  // Reply.io campaign = {name, owned_by (optional)}
-  const camp=await replyProxy(apiKey,"/campaigns",{
-    name:campaignName,
-    owned_by:null,
-  });
-  // Reply.io returns the campaign object; id varies by version
-  const campaignId=camp.id||camp.campaignId||camp.data?.id;
-  if(!campaignId)throw new Error("Reply.io campaign created but no ID returned. Check API key permissions.");
-
-  // Step 2: Add email steps as campaign sequence steps
-  // Reply.io: POST /campaigns/{id}/emailaccounts is for senders
-  // Steps are added via PUT /campaigns/{id} with steps array
-  // Each step: {type:"email", subject, body, delay (days from previous)}
-  const steps=emailSteps.map((s,i)=>({
-    type:"email",
-    subject:s.subject||"Following up",
-    body:emailToHtml(s.body||""),
-    delay:i===0?0:Math.max(1,(emailSteps[i].day||1)-(emailSteps[i-1].day||1)),
-  }));
-  await replyProxy(apiKey,`/campaigns/${campaignId}`,[...steps],"PUT");
-
-  // Step 3: Add contacts (people) to the campaign
-  // Reply.io: POST /people to create contact, then POST /campaigns/{id}/people to add to campaign
+  // Push each valid contact to the campaign
   const validContacts=contacts.filter(c=>c.email&&c.email!=="Not found"&&c.email!==null&&c.email.includes("@"));
+  if(!validContacts.length)throw new Error("No contacts with valid email addresses to push.");
+
   let addedCount=0;
+  const errors=[];
   for(const ct of validContacts){
     const cleanName=(ct.name&&ct.name!=="Unknown")?ct.name.trim():"";
     const parts=cleanName.split(" ").filter(Boolean);
     const emailPrefix=ct.email?.split("@")[0]?.split(/[._+-]/)[0]||"";
     const emailFirst=emailPrefix?emailPrefix.charAt(0).toUpperCase()+emailPrefix.slice(1).toLowerCase():"";
     try{
-      // Create or find person
-      const person=await replyProxy(apiKey,"/people",{
+      // POST /people with campaignId creates person AND pushes to campaign in one call
+      await replyProxy(apiKey,"/people",{
         email:ct.email,
         firstName:parts[0]||emailFirst||"",
         lastName:parts.slice(1).join(" ")||"",
-        companyName:ct.company||"",
+        company:ct.company||"",
         phone:(ct.phone&&ct.phone!=="Not found")?ct.phone:"",
         linkedInProfile:ct.linkedin||"",
+        campaignId:Number(campaignId),
       });
-      const personId=person.id||person.personId||person.data?.id;
-      if(personId){
-        // Add person to campaign
-        await replyProxy(apiKey,`/campaigns/${campaignId}/people`,{personId});
-        addedCount++;
-      }
+      addedCount++;
     }catch(e){
-      console.warn(`Reply.io: could not add contact ${ct.email}:`,e.message);
+      console.warn(`Reply.io: could not add ${ct.email}:`,e.message);
+      errors.push(ct.email);
     }
   }
-  return {campaignId, addedCount, totalContacts:validContacts.length};
+  return {campaignId, addedCount, totalContacts:validContacts.length, errors};
+}
+
+// Fetch Reply.io campaigns list for the dropdown
+async function replyGetCampaigns(apiKey){
+  if(!apiKey)return [];
+  try{
+    const list=await replyProxy(apiKey,"/campaigns","","GET");
+    return Array.isArray(list)?list:[];
+  }catch{return [];}
 }
 
 // ── Claude AI ──
@@ -782,7 +773,7 @@ function SettingsView({settings,onSave,users,onAdd,onRemove,onPwReset,cu,niches,
             </div>
             <F lbl="Anthropic API key" k="anthropicKey" ph="sk-ant-..." secret hint="console.anthropic.com → API Keys - required on Vercel, optional in Claude.ai"/>
             <F lbl="ElevenLabs Voice ID" k="elevenLabsVoiceId" ph="pNInz6obpgDQGcFmaJgB" hint="Default: Adam. Find others at elevenlabs.io/voice-library"/>
-            {import.meta.env.VITE_SUPABASE_URL?(
+            {ENV_SB_URL?(
               <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2.5 mb-2">
                 <CheckCircle2 size={13} className="text-emerald-500 flex-shrink-0"/>
                 <span className="text-xs text-emerald-700 font-medium">Supabase connected via Vercel environment variables</span>
@@ -959,7 +950,7 @@ function ImportTab({leads,onBatchSave,cu,settings}){
     // Validate websites — highlight invalid ones
     const invalidWebsites=valid.filter(r=>r.website&&!isValidDomain(r.website));
     if(invalidWebsites.length){
-      setErr(`Invalid website${invalidWebsites.length>1?"s":""}: ${invalidWebsites.map(r=>`"${r.website}" (${r.name})`).join(", ")} — use format: company.com`);
+      setErr(`Invalid website${invalidWebsites.length>1?"s":""}: ${invalidWebsites.map(r=>`"${r.website}" (${r.name})`).join(", ")} - use format: company.com`);
       return;
     }
     const alreadyInQueue=queue.map(q=>q.name.toLowerCase());
@@ -1577,7 +1568,7 @@ function CompanyDetail({company,idx,onBack,onSave,isSaved,cu,settings,onLogAct,o
               <h1 className="text-xl font-semibold text-slate-800">{company.name}</h1>
               <Score s={company.fitScore}/>
             </div>
-            <p className="text-sm text-slate-500">{company.industry}{company.size?` · ${company.size}`:""}{company.location?` · ${company.location}`:""}</p>
+            <p className="text-sm text-slate-500">{company.industry}{company.size?` - ${company.size}`:""}{company.location?` - ${company.location}`:""}</p>
             {company.website&&<a href={`https://${company.website}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline mt-1"><Globe size={11}/>{company.website}</a>}
             {company.signal&&<p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-1.5 mt-2">{company.signal}</p>}
           </div>
@@ -2073,6 +2064,7 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
   const [liC,setLiC]=useState([]);const [liMsg,setLiMsg]=useState({});const [liLoad,setLiLoad]=useState({});const [liCp,setLiCp]=useState("");const [liOpen,setLiOpen]=useState(true);
   const [phC,setPhC]=useState([]);const [scripts,setScripts]=useState({});const [texts,setTexts]=useState({});const [audios,setAudios]=useState({});const [playing,setPlaying]=useState({});const [lScript,setLScript]=useState({});const [lText,setLText]=useState({});const [lVoice,setLVoice]=useState({});const [phTab,setPhTab]=useState({});const [phCp,setPhCp]=useState("");const [phOpen,setPhOpen]=useState(true);
   const [iPushing,setIPushing]=useState(false);const [iPushed,setIPushed]=useState(false);const [iErr,setIErr]=useState("");const [iSkipped,setISkipped]=useState(0);const [iSent,setISent]=useState(0);const [iResult,setIResult]=useState(null);
+  const [replyCampaigns,setReplyCampaigns]=useState([]);const [selectedCampaignId,setSelectedCampaignId]=useState("");const [loadingCampaigns,setLoadingCampaigns]=useState(false);
   const [history,setHistory]=useState([]);
   useEffect(()=>{
     // Load push history from Supabase
@@ -2083,6 +2075,15 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
   },[company.name,iPushed]);
   const aRefs=useRef({});
   const replyKey=settings?.replyApiKey||"";
+  useEffect(()=>{
+    if(!replyKey)return;
+    setLoadingCampaigns(true);
+    replyGetCampaigns(replyKey).then(list=>{
+      setReplyCampaigns(list);
+      if(list.length&&!selectedCampaignId)setSelectedCampaignId(String(list[0].id));
+      setLoadingCampaigns(false);
+    });
+  },[replyKey]);
   useEffect(()=>{sg(`enr_${company.name.toLowerCase().replace(/\s+/g,"_")}`).then(d=>{if(d?.keyContacts){setLiC(d.keyContacts.filter(c=>c.linkedin&&c.linkedin.length>5));setPhC(d.keyContacts);}});},[company.name]);
   const E=`Evolve ESolutions - IT, HR, Healthcare, Financial Services, Legal recruitment, Pleasanton CA. 24-48hr screened candidates. Passive talent. No placement no fee. 1-3 day onboarding.`;
   const iMap={"Technology / SaaS":"IT/software","Financial Services":"finance/compliance","Healthcare":"healthcare/clinical","Legal":"legal/paralegal","Manufacturing":"engineering/ops","E-commerce / Retail":"tech/ops","Construction":"project management","Professional Services":"professional/admin","Media & Marketing":"creative/marketing","Logistics & Supply Chain":"ops/tech"};
@@ -2221,7 +2222,7 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
         setIErr(reason);setIPushing(false);return;
       }
       const campaignName=`EVL-AI-Client - ${company.name} - ${tmpl.label} - ${new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`;
-      const pushResult=await replyPushCampaign(replyKey,campaignName,contacts,steps);
+      const pushResult=await replyPushCampaign(replyKey,campaignName,contacts,steps,selectedCampaignId);
       const campaignId=pushResult.campaignId||pushResult;
       if(pushResult.addResult)setIResult(pushResult.addResult);
       onLogAct(company,`pushed to Reply.io - ${tmpl.label} - ${contacts.length} contact${contacts.length!==1?"s":""} - ID: ${campaignId}`);
@@ -2270,6 +2271,17 @@ function Outreach({company,onBack,onSave,isSaved,cu,onLogAct,settings}){
       <ReplyTags user={cu}/>
 
       {/* Reply.io campaign push */}
+      {replyKey&&<div className="bg-white rounded-xl border border-slate-200 px-4 py-3 mb-3">
+        <div className="flex items-center gap-3">
+          <label className="text-xs font-medium text-slate-500 whitespace-nowrap">Reply.io campaign:</label>
+          {loadingCampaigns?<span className="text-xs text-slate-400">Loading campaigns...</span>:
+          replyCampaigns.length?<select value={selectedCampaignId} onChange={e=>setSelectedCampaignId(e.target.value)} className="flex-1 px-3 py-1.5 rounded-lg border border-slate-200 text-xs bg-white focus:outline-none focus:border-slate-400">
+            {replyCampaigns.map(camp=><option key={camp.id} value={String(camp.id)}>{camp.name}</option>)}
+          </select>:
+          <span className="text-xs text-amber-600">No campaigns found — create one in Reply.io first</span>}
+          <button onClick={()=>{setLoadingCampaigns(true);replyGetCampaigns(replyKey).then(list=>{setReplyCampaigns(list);if(list.length)setSelectedCampaignId(String(list[0].id));setLoadingCampaigns(false);});}} className="text-xs text-slate-400 hover:text-slate-600 px-2 py-1 border border-slate-200 rounded-lg" title="Refresh campaigns"><RefreshCw size={10}/></button>
+        </div>
+      </div>}
       <div className={`rounded-xl border px-4 py-3 mb-5 flex items-center justify-between gap-4 ${iPushed?"bg-emerald-50 border-emerald-100":"bg-slate-50 border-slate-200"}`}>
         <div className="flex-1 min-w-0">
           {iPushed?(
